@@ -1,0 +1,22 @@
+[package]
+name = "port-deck"
+version = "0.1.0"
+description = "Windows tray manager for local and WSL development services"
+authors = ["Port Deck contributors"]
+edition = "2024"
+
+[lib]
+name = "port_deck_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+netstat2 = "0.11.2"
+port-deck-core = { path = "../crates/port-deck-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.39.6"
+tauri = { version = "2", features = ["tray-icon"] }
+thiserror = "2"

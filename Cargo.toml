@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/port-deck-core", "src-tauri"]
+resolver = "2"
