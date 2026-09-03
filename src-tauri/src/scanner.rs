@@ -5,8 +5,8 @@ use std::{
 };
 
 use port_deck_core::{
-    ProcessOrigin, ResourceKind, ServiceProcess, decode_command_output, is_safe_service_unit,
-    parse_wsl_snapshot,
+    ProcessOrigin, ResourceKind, ServiceProcess, decode_command_output, is_application_dev_service,
+    is_safe_service_unit, parse_wsl_snapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +19,8 @@ use port_deck_core::{
 };
 #[cfg(target_os = "windows")]
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+const APPLICATION_DEV_PORT: u16 = 1420;
 
 const WSL_SNAPSHOT_SCRIPT: &str = r#"
 printf 'PORTDECK/2\036'
@@ -154,6 +156,10 @@ pub fn scan_all() -> ScanSnapshot {
         Ok(Err(error)) => warnings.push(format!("Windows: {error}")),
         Err(_) => warnings.push("Windows 扫描任务意外退出".into()),
     }
+
+    services.retain(|service| {
+        !is_application_dev_service(service, env!("CARGO_PKG_NAME"), APPLICATION_DEV_PORT)
+    });
 
     services.sort_by_key(|service| {
         let kind = match service.resource_kind {

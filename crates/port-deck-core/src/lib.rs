@@ -273,6 +273,20 @@ pub fn can_terminate_runtime(runtime: &RuntimeKind) -> bool {
     !matches!(runtime, RuntimeKind::Sshd)
 }
 
+pub fn is_application_dev_service(
+    service: &ServiceProcess,
+    application_name: &str,
+    dev_port: u16,
+) -> bool {
+    service.resource_kind == ResourceKind::Development
+        && service.runtime == RuntimeKind::Vite
+        && service.ports.contains(&dev_port)
+        && service
+            .project_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(application_name))
+}
+
 pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProcess> {
     #[derive(Debug)]
     struct ProcessMetadata {

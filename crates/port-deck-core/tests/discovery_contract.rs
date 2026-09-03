@@ -1,7 +1,7 @@
 use port_deck_core::{
     IdentityError, NativeListenerRecord, NativeProcessRecord, ProcessOrigin, ResourceKind,
-    RuntimeKind, classify_runtime, decode_command_output, ensure_process_identity,
-    group_native_resources, is_safe_service_unit, parse_wsl_snapshot,
+    RuntimeKind, ServiceProcess, classify_runtime, decode_command_output, ensure_process_identity,
+    group_native_resources, is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
 };
 
 #[test]
@@ -101,6 +101,44 @@ fn discovers_tunnels_without_listening_ports() {
     assert_eq!(tunnel.resource_kind, ResourceKind::Tunnel);
     assert!(tunnel.ports.is_empty());
     assert!(tunnel.can_terminate);
+}
+
+#[test]
+fn identifies_only_the_application_own_dev_service() {
+    let port_deck = group_native_resources(
+        vec![NativeListenerRecord {
+            port: 1420,
+            host: "127.0.0.1".into(),
+            pid: 8800,
+            parent_pid: 8700,
+            process_name: "node.exe".into(),
+            command: r#"node.exe node_modules\vite\bin\vite.js"#.into(),
+            cwd: Some(r"C:\Projects\port-deck".into()),
+            start_token: "12500".into(),
+        }],
+        Vec::new(),
+    )
+    .remove(0);
+    let another_project = ServiceProcess {
+        project_name: Some("customer-portal".into()),
+        ..port_deck.clone()
+    };
+    let another_port = ServiceProcess {
+        ports: vec![5173],
+        ..port_deck.clone()
+    };
+
+    assert!(is_application_dev_service(&port_deck, "port-deck", 1420));
+    assert!(!is_application_dev_service(
+        &another_project,
+        "port-deck",
+        1420
+    ));
+    assert!(!is_application_dev_service(
+        &another_port,
+        "port-deck",
+        1420
+    ));
 }
 
 #[test]
