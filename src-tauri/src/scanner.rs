@@ -5,8 +5,8 @@ use std::{
 };
 
 use port_deck_core::{
-    ProcessOrigin, ResourceKind, ServiceProcess, decode_command_output, is_application_dev_service,
-    is_safe_service_unit, parse_wsl_snapshot,
+    ProcessOrigin, ResourceGroup, ResourceKind, ServiceProcess, decode_command_output,
+    group_related_services, is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +105,7 @@ done
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanSnapshot {
-    pub services: Vec<ServiceProcess>,
+    pub groups: Vec<ResourceGroup>,
     pub warnings: Vec<String>,
     pub scanned_at: u128,
 }
@@ -172,7 +172,7 @@ pub fn scan_all() -> ScanSnapshot {
     });
 
     ScanSnapshot {
-        services,
+        groups: group_related_services(services),
         warnings,
         scanned_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -1,7 +1,8 @@
 use port_deck_core::{
     IdentityError, NativeListenerRecord, NativeProcessRecord, ProcessOrigin, ResourceKind,
-    RuntimeKind, ServiceProcess, classify_runtime, decode_command_output, ensure_process_identity,
-    group_native_resources, is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
+    RuntimeKind, ServiceProcess, TunnelTarget, classify_runtime, decode_command_output,
+    ensure_process_identity, extract_tunnel_target, group_native_resources, group_related_services,
+    is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
 };
 
 #[test]
@@ -101,6 +102,123 @@ fn discovers_tunnels_without_listening_ports() {
     assert_eq!(tunnel.resource_kind, ResourceKind::Tunnel);
     assert!(tunnel.ports.is_empty());
     assert!(tunnel.can_terminate);
+    assert_eq!(
+        tunnel.tunnel_target,
+        Some(TunnelTarget {
+            host: "localhost".into(),
+            port: 3000,
+        })
+    );
+}
+
+#[test]
+fn extracts_local_targets_from_supported_tunnel_commands() {
+    let cases = [
+        (
+            RuntimeKind::Cloudflared,
+            "cloudflared tunnel --url http://localhost:5000",
+            "localhost",
+            5000,
+        ),
+        (
+            RuntimeKind::Cloudflared,
+            "cloudflared tunnel --url=https://127.0.0.1:7443/api",
+            "127.0.0.1",
+            7443,
+        ),
+        (RuntimeKind::Ngrok, "ngrok http 5173", "localhost", 5173),
+        (
+            RuntimeKind::SshTunnel,
+            "ssh -NT -R 0.0.0.0:33:127.0.0.1:22 host",
+            "127.0.0.1",
+            22,
+        ),
+        (
+            RuntimeKind::LocalTunnel,
+            "lt --port 6006",
+            "localhost",
+            6006,
+        ),
+        (
+            RuntimeKind::Bore,
+            "bore local 8080 --to bore.pub",
+            "localhost",
+            8080,
+        ),
+    ];
+
+    for (runtime, command, host, port) in cases {
+        assert_eq!(
+            extract_tunnel_target(&runtime, command),
+            Some(TunnelTarget {
+                host: host.into(),
+                port,
+            }),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn groups_a_tunnel_with_its_source_service_in_the_same_scope() {
+    let listeners = vec![NativeListenerRecord {
+        port: 5000,
+        host: "127.0.0.1".into(),
+        pid: 8100,
+        parent_pid: 8000,
+        process_name: "node.exe".into(),
+        command: "node.exe server.js".into(),
+        cwd: Some(r"C:\Projects\catalog-api".into()),
+        start_token: "31000".into(),
+    }];
+    let tunnels = vec![NativeProcessRecord {
+        pid: 8200,
+        parent_pid: 8000,
+        process_name: "cloudflared.exe".into(),
+        command: "cloudflared.exe tunnel --url http://localhost:5000".into(),
+        cwd: Some(r"C:\Projects\catalog-api".into()),
+        start_token: "31010".into(),
+    }];
+
+    let groups = group_related_services(group_native_resources(listeners, tunnels));
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].primary_port, Some(5000));
+    assert_eq!(groups[0].services.len(), 2);
+    assert_eq!(
+        groups[0].services[0].resource_kind,
+        ResourceKind::Development
+    );
+    assert_eq!(groups[0].services[1].resource_kind, ResourceKind::Tunnel);
+}
+
+#[test]
+fn does_not_group_same_numbered_ports_across_execution_scopes() {
+    let native = group_native_resources(
+        vec![NativeListenerRecord {
+            port: 5000,
+            host: "127.0.0.1".into(),
+            pid: 8100,
+            parent_pid: 8000,
+            process_name: "node.exe".into(),
+            command: "node.exe server.js".into(),
+            cwd: Some(r"C:\Projects\catalog-api".into()),
+            start_token: "31000".into(),
+        }],
+        Vec::new(),
+    );
+    let wsl = parse_wsl_snapshot(
+        "Debian",
+        concat!(
+            "PORTDECK/2\x1e",
+            "P\x1f8300\x1f8300 (cloudflared) S 1 8300 8300 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 32000\x1f/home/mocha/catalog-api\x1f\x1fcloudflared tunnel --url http://localhost:5000\x1e",
+        ),
+    );
+
+    let groups = group_related_services(native.into_iter().chain(wsl).collect());
+
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().all(|group| group.services.len() == 1));
 }
 
 #[test]

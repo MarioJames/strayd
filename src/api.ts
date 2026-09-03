@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { ScanSnapshot, ServiceProcess, TerminateRequest } from './types';
+import type { ResourceGroup, ScanSnapshot, ServiceProcess, TerminateRequest } from './types';
 
 const mockServices: ServiceProcess[] = [
   {
@@ -8,16 +8,17 @@ const mockServices: ServiceProcess[] = [
     distribution: 'Debian',
     pid: 4182,
     parentPid: 4129,
-    ports: [3000],
+    ports: [5000],
     hosts: ['0.0.0.0'],
     processName: 'next-server',
-    command: 'node node_modules/next/dist/bin/next dev --turbo',
+    command: 'node node_modules/next/dist/bin/next dev --turbo --port 5000',
     cwd: '/home/mocha/workspaces/storefront',
     projectName: 'storefront',
     runtime: 'nextJs',
     resourceKind: 'development',
     canTerminate: true,
     managerUnit: null,
+    tunnelTarget: null,
     startToken: '90110',
   },
   {
@@ -36,6 +37,7 @@ const mockServices: ServiceProcess[] = [
     resourceKind: 'development',
     canTerminate: true,
     managerUnit: null,
+    tunnelTarget: null,
     startToken: '92518',
   },
   {
@@ -54,6 +56,7 @@ const mockServices: ServiceProcess[] = [
     resourceKind: 'development',
     canTerminate: true,
     managerUnit: null,
+    tunnelTarget: null,
     startToken: '4729382',
   },
   {
@@ -72,6 +75,7 @@ const mockServices: ServiceProcess[] = [
     resourceKind: 'tunnel',
     canTerminate: true,
     managerUnit: 'aliyunhost-reverse-tunnel.service',
+    tunnelTarget: { host: '127.0.0.1', port: 22 },
     startToken: '44000',
   },
   {
@@ -83,13 +87,14 @@ const mockServices: ServiceProcess[] = [
     ports: [],
     hosts: [],
     processName: 'cloudflared',
-    command: 'cloudflared tunnel --url http://127.0.0.1:3000',
+    command: 'cloudflared tunnel --url http://127.0.0.1:5000',
     cwd: '/home/mocha/workspaces/storefront',
     projectName: 'storefront',
     runtime: 'cloudflared',
     resourceKind: 'tunnel',
     canTerminate: true,
     managerUnit: null,
+    tunnelTarget: { host: '127.0.0.1', port: 5000 },
     startToken: '97112',
   },
   {
@@ -108,7 +113,31 @@ const mockServices: ServiceProcess[] = [
     resourceKind: 'system',
     canTerminate: false,
     managerUnit: 'ssh.service',
+    tunnelTarget: null,
     startToken: '5012',
+  },
+];
+
+const mockGroups: ResourceGroup[] = [
+  {
+    id: `group:${mockServices[0].id}`,
+    primaryPort: 5000,
+    services: [mockServices[0], mockServices[4]],
+  },
+  {
+    id: `group:${mockServices[1].id}`,
+    primaryPort: 5173,
+    services: [mockServices[1]],
+  },
+  {
+    id: `group:${mockServices[2].id}`,
+    primaryPort: 6006,
+    services: [mockServices[2]],
+  },
+  {
+    id: `group:${mockServices[5].id}`,
+    primaryPort: 22,
+    services: [mockServices[5], mockServices[3]],
   },
 ];
 
@@ -117,7 +146,7 @@ const isTauri = () => '__TAURI_INTERNALS__' in window;
 export async function scanServices(): Promise<ScanSnapshot> {
   if (!isTauri()) {
     await new Promise((resolve) => window.setTimeout(resolve, 260));
-    return { services: mockServices, warnings: [], scannedAt: Date.now() };
+    return { groups: mockGroups, warnings: [], scannedAt: Date.now() };
   }
 
   return invoke<ScanSnapshot>('scan_services');

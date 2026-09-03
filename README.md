@@ -6,11 +6,13 @@ Port Deck 是一个用 Tauri 2 与 Rust 编写的 Windows 托盘工具，用来�
 
 - 扫描 Windows 与所有运行中的 WSL 发行版，按进程合并多个监听端口。
 - 即使没有本地监听端口，也会发现 `cloudflared`、ngrok、SSH `-R`、autossh、frpc、localtunnel 与 bore 隧道。
+- 从隧道命令中提取本地目标（如 `cloudflared --url http://localhost:5000`），将同一 Windows / WSL 执行域里的隧道与 `:5000` 监听服务自动关联成组。
 - 展示端口、PID、命令行、工作目录、项目名、发行版和关联的 systemd unit。
 - 识别 Next.js、Vite、Nuxt、Astro、SvelteKit、Remix、Angular、Storybook、Webpack、Rspack、Parcel、Node.js、Bun 与 Deno。
 - 支持按端口、项目、隧道、进程或路径搜索，并按 Windows / WSL、开发服务、隧道和系统服务筛选。
 - 两次确认后结束整个进程树；执行前再次比对进程启动标识，避免 PID 已复用时误杀新进程。
 - systemd 托管的隧道会停止对应 unit，避免被自动重启；`sshd` 会展示，但不提供结束操作。
+- 关联组同时提供“仅关服务”“仅关隧道”和二次确认的“关闭整组”；组内有受保护资源时不会提供可能误导的整组关闭操作。
 - 关闭窗口后留在系统托盘；左键托盘图标恢复窗口。
 
 `docker-desktop` 与 `docker-desktop-data` 是内部发行版，不会进入 WSL 扫描；Docker 映射到 Windows 的监听端口仍会由 Windows 扫描发现。

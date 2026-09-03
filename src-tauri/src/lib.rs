@@ -47,7 +47,7 @@ pub fn run() {
                         .expect("application icon is missing")
                         .clone(),
                 )
-                .tooltip("Port Deck · 本地开发端口")
+                .tooltip("Port Deck · 本地运行资源")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {

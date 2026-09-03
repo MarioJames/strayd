@@ -25,6 +25,11 @@ export type RuntimeKind =
 export type ProcessOrigin = 'windows' | 'wsl';
 export type ResourceKind = 'development' | 'tunnel' | 'system' | 'other';
 
+export interface TunnelTarget {
+  host: string;
+  port: number;
+}
+
 export interface ServiceProcess {
   id: string;
   origin: ProcessOrigin;
@@ -41,10 +46,18 @@ export interface ServiceProcess {
   resourceKind: ResourceKind;
   canTerminate: boolean;
   managerUnit: string | null;
+  tunnelTarget: TunnelTarget | null;
   startToken: string;
 }
-export interface ScanSnapshot {
+
+export interface ResourceGroup {
+  id: string;
+  primaryPort: number | null;
   services: ServiceProcess[];
+}
+
+export interface ScanSnapshot {
+  groups: ResourceGroup[];
   warnings: string[];
   scannedAt: number;
 }

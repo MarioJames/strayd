@@ -63,7 +63,23 @@ pub struct ServiceProcess {
     pub resource_kind: ResourceKind,
     pub can_terminate: bool,
     pub manager_unit: Option<String>,
+    pub tunnel_target: Option<TunnelTarget>,
     pub start_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelTarget {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceGroup {
+    pub id: String,
+    pub primary_port: Option<u16>,
+    pub services: Vec<ServiceProcess>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +289,20 @@ pub fn can_terminate_runtime(runtime: &RuntimeKind) -> bool {
     !matches!(runtime, RuntimeKind::Sshd)
 }
 
+pub fn extract_tunnel_target(runtime: &RuntimeKind, command: &str) -> Option<TunnelTarget> {
+    let arguments = command_arguments(command);
+    match runtime {
+        RuntimeKind::Cloudflared => flag_value(&arguments, "--url").and_then(parse_origin_target),
+        RuntimeKind::Ngrok => subcommand_target(&arguments, &["http", "http2", "tcp", "tls"]),
+        RuntimeKind::SshTunnel => ssh_reverse_target(&arguments),
+        RuntimeKind::LocalTunnel => flag_value(&arguments, "--port")
+            .or_else(|| flag_value(&arguments, "-p"))
+            .and_then(parse_local_port),
+        RuntimeKind::Bore => subcommand_target(&arguments, &["local"]),
+        _ => None,
+    }
+}
+
 pub fn is_application_dev_service(
     service: &ServiceProcess,
     application_name: &str,
@@ -345,6 +375,7 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
         let runtime = classify_runtime(&metadata.process_name, &metadata.command);
         let resource_kind = resource_kind_for(&runtime);
         let can_terminate = can_terminate_runtime(&runtime);
+        let tunnel_target = extract_tunnel_target(&runtime, &metadata.command);
         let service = grouped.entry(pid).or_insert_with(|| ServiceProcess {
             id: format!("wsl:{distribution}:{pid}:{}", metadata.start_token),
             origin: ProcessOrigin::Wsl,
@@ -361,6 +392,7 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
             resource_kind,
             can_terminate,
             manager_unit: metadata.manager_unit.clone(),
+            tunnel_target,
             start_token: metadata.start_token.clone(),
         });
         push_listener(service, port, host);
@@ -376,6 +408,7 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
         }
         let resource_kind = resource_kind_for(&runtime);
         let can_terminate = can_terminate_runtime(&runtime);
+        let tunnel_target = extract_tunnel_target(&runtime, &metadata.command);
         grouped.insert(
             pid,
             ServiceProcess {
@@ -394,6 +427,7 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
                 resource_kind,
                 can_terminate,
                 manager_unit: metadata.manager_unit,
+                tunnel_target,
                 start_token: metadata.start_token,
             },
         );
@@ -417,6 +451,7 @@ pub fn group_native_resources(
         let runtime = classify_runtime(&record.process_name, &record.command);
         let resource_kind = resource_kind_for(&runtime);
         let can_terminate = can_terminate_runtime(&runtime);
+        let tunnel_target = extract_tunnel_target(&runtime, &record.command);
         let service = grouped.entry(key).or_insert_with(|| ServiceProcess {
             id: format!("windows:{}:{}", record.pid, record.start_token),
             origin: ProcessOrigin::Windows,
@@ -433,6 +468,7 @@ pub fn group_native_resources(
             resource_kind,
             can_terminate,
             manager_unit: None,
+            tunnel_target,
             start_token: record.start_token.clone(),
         });
         push_listener(service, record.port, record.host);
@@ -449,6 +485,7 @@ pub fn group_native_resources(
             continue;
         }
         let can_terminate = can_terminate_runtime(&runtime);
+        let tunnel_target = extract_tunnel_target(&runtime, &process.command);
         grouped.insert(
             key,
             ServiceProcess {
@@ -467,12 +504,80 @@ pub fn group_native_resources(
                 resource_kind,
                 can_terminate,
                 manager_unit: None,
+                tunnel_target,
                 start_token: process.start_token,
             },
         );
     }
 
     finish_grouping(grouped)
+}
+
+pub fn group_related_services(services: Vec<ServiceProcess>) -> Vec<ResourceGroup> {
+    let mut listeners = BTreeMap::<(u8, String, u16), Vec<usize>>::new();
+    for (index, service) in services.iter().enumerate() {
+        if service.resource_kind == ResourceKind::Tunnel {
+            continue;
+        }
+        for port in &service.ports {
+            listeners
+                .entry(execution_scope(service, *port))
+                .or_default()
+                .push(index);
+        }
+    }
+
+    let mut tunnel_links = BTreeMap::<usize, Vec<usize>>::new();
+    let mut linked_tunnels = vec![false; services.len()];
+    for (tunnel_index, tunnel) in services.iter().enumerate() {
+        if tunnel.resource_kind != ResourceKind::Tunnel {
+            continue;
+        }
+        let Some(target) = tunnel
+            .tunnel_target
+            .as_ref()
+            .filter(|target| is_loopback_host(&target.host))
+        else {
+            continue;
+        };
+        let Some(candidates) = listeners.get(&execution_scope(tunnel, target.port)) else {
+            continue;
+        };
+        if let [service_index] = candidates.as_slice() {
+            tunnel_links
+                .entry(*service_index)
+                .or_default()
+                .push(tunnel_index);
+            linked_tunnels[tunnel_index] = true;
+        }
+    }
+
+    let mut consumed = vec![false; services.len()];
+    let mut groups = Vec::new();
+    for (index, service) in services.iter().enumerate() {
+        if consumed[index] || linked_tunnels[index] {
+            continue;
+        }
+        consumed[index] = true;
+        let linked_tunnels = tunnel_links.get(&index).cloned().unwrap_or_default();
+        let primary_port = linked_tunnels
+            .first()
+            .and_then(|tunnel_index| services[*tunnel_index].tunnel_target.as_ref())
+            .map(|target| target.port)
+            .or_else(|| service.ports.first().copied())
+            .or_else(|| service.tunnel_target.as_ref().map(|target| target.port));
+        let mut members = vec![service.clone()];
+        for tunnel_index in linked_tunnels {
+            consumed[tunnel_index] = true;
+            members.push(services[tunnel_index].clone());
+        }
+        groups.push(ResourceGroup {
+            id: format!("group:{}", service.id),
+            primary_port,
+            services: members,
+        });
+    }
+    groups
 }
 
 pub fn ensure_process_identity(
@@ -511,6 +616,116 @@ fn has_reverse_forward(command: &str) -> bool {
             || argument.starts_with("remoteforward=")
             || argument.starts_with("-oremoteforward=")
     })
+}
+
+fn command_arguments(command: &str) -> Vec<&str> {
+    command
+        .split_whitespace()
+        .map(|argument| argument.trim_matches(['"', '\'']))
+        .collect()
+}
+
+fn flag_value<'a>(arguments: &[&'a str], flag: &str) -> Option<&'a str> {
+    arguments.iter().enumerate().find_map(|(index, argument)| {
+        if *argument == flag {
+            arguments.get(index + 1).copied()
+        } else {
+            argument
+                .strip_prefix(flag)
+                .and_then(|value| value.strip_prefix('='))
+        }
+    })
+}
+
+fn subcommand_target(arguments: &[&str], subcommands: &[&str]) -> Option<TunnelTarget> {
+    let index = arguments.iter().position(|argument| {
+        subcommands
+            .iter()
+            .any(|value| argument.eq_ignore_ascii_case(value))
+    })?;
+    arguments[index + 1..]
+        .iter()
+        .filter(|argument| !argument.starts_with('-'))
+        .find_map(|argument| parse_origin_target(argument))
+}
+
+fn parse_origin_target(value: &str) -> Option<TunnelTarget> {
+    if let Some(target) = parse_local_port(value) {
+        return Some(target);
+    }
+    let normalized;
+    let value = if value.contains("://") {
+        value
+    } else {
+        normalized = format!("http://{value}");
+        &normalized
+    };
+    let url = url::Url::parse(value).ok()?;
+    Some(TunnelTarget {
+        host: url
+            .host_str()?
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase(),
+        port: url.port_or_known_default()?,
+    })
+}
+
+fn parse_local_port(value: &str) -> Option<TunnelTarget> {
+    value.parse::<u16>().ok().map(|port| TunnelTarget {
+        host: "localhost".into(),
+        port,
+    })
+}
+
+fn ssh_reverse_target(arguments: &[&str]) -> Option<TunnelTarget> {
+    let spec = arguments.iter().enumerate().find_map(|(index, argument)| {
+        let lower = argument.to_ascii_lowercase();
+        if lower == "-r" {
+            arguments.get(index + 1).copied()
+        } else if lower.starts_with("-r") && argument.len() > 2 {
+            Some(&argument[2..])
+        } else if let Some(value) = lower.strip_prefix("-oremoteforward=") {
+            let offset = argument.len() - value.len();
+            Some(&argument[offset..])
+        } else if let Some(value) = lower.strip_prefix("remoteforward=") {
+            let offset = argument.len() - value.len();
+            Some(&argument[offset..])
+        } else {
+            None
+        }
+    })?;
+    let (host_part, port) = spec.rsplit_once(':')?;
+    let port = port.parse::<u16>().ok()?;
+    let host = if host_part.ends_with(']') {
+        let start = host_part.rfind('[')?;
+        &host_part[start + 1..host_part.len() - 1]
+    } else {
+        host_part.rsplit_once(':')?.1
+    };
+    Some(TunnelTarget {
+        host: host.to_ascii_lowercase(),
+        port,
+    })
+}
+
+fn execution_scope(service: &ServiceProcess, port: u16) -> (u8, String, u16) {
+    let origin = match service.origin {
+        ProcessOrigin::Windows => 0,
+        ProcessOrigin::Wsl => 1,
+    };
+    (
+        origin,
+        service.distribution.clone().unwrap_or_default(),
+        port,
+    )
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn normalized_optional(value: &str) -> Option<String> {
