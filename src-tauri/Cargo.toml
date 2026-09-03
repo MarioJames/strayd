@@ -1,7 +1,7 @@
 [package]
 name = "port-deck"
 version = "0.1.0"
-description = "Windows tray manager for local and WSL development services"
+description = "Windows tray manager for local and WSL development resources"
 authors = ["Port Deck contributors"]
 edition = "2024"
 

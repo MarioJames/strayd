@@ -13,9 +13,17 @@ export type RuntimeKind =
   | 'node'
   | 'bun'
   | 'deno'
+  | 'cloudflared'
+  | 'ngrok'
+  | 'sshTunnel'
+  | 'frp'
+  | 'localTunnel'
+  | 'bore'
+  | 'sshd'
   | 'other';
 
 export type ProcessOrigin = 'windows' | 'wsl';
+export type ResourceKind = 'development' | 'tunnel' | 'system' | 'other';
 
 export interface ServiceProcess {
   id: string;
@@ -30,7 +38,9 @@ export interface ServiceProcess {
   cwd: string | null;
   projectName: string | null;
   runtime: RuntimeKind;
-  isDevServer: boolean;
+  resourceKind: ResourceKind;
+  canTerminate: boolean;
+  managerUnit: string | null;
   startToken: string;
 }
 export interface ScanSnapshot {
@@ -44,4 +54,5 @@ export interface TerminateRequest {
   distribution: string | null;
   pid: number;
   startToken: string;
+  managerUnit: string | null;
 }

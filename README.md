@@ -1,14 +1,16 @@
 # Port Deck
 
-Port Deck 是一个用 Tauri 2 与 Rust 编写的 Windows 托盘工具，用来发现并结束 Windows、WSL 中“占着端口却找不到在哪”的本地开发服务。
+Port Deck 是一个用 Tauri 2 与 Rust 编写的 Windows 托盘工具，用来发现并管理 Windows、WSL 中“启动后找不到在哪”的本地开发服务、临时公网隧道和 SSH 服务。
 
 ## 能做什么
 
 - 扫描 Windows 与所有运行中的 WSL 发行版，按进程合并多个监听端口。
-- 展示端口、PID、命令行、工作目录、项目名和发行版。
+- 即使没有本地监听端口，也会发现 `cloudflared`、ngrok、SSH `-R`、autossh、frpc、localtunnel 与 bore 隧道。
+- 展示端口、PID、命令行、工作目录、项目名、发行版和关联的 systemd unit。
 - 识别 Next.js、Vite、Nuxt、Astro、SvelteKit、Remix、Angular、Storybook、Webpack、Rspack、Parcel、Node.js、Bun 与 Deno。
-- 支持按端口、项目、进程或路径搜索，并按 Windows / WSL、开发服务筛选。
+- 支持按端口、项目、隧道、进程或路径搜索，并按 Windows / WSL、开发服务、隧道和系统服务筛选。
 - 两次确认后结束整个进程树；执行前再次比对进程启动标识，避免 PID 已复用时误杀新进程。
+- systemd 托管的隧道会停止对应 unit，避免被自动重启；`sshd` 会展示，但不提供结束操作。
 - 关闭窗口后留在系统托盘；左键托盘图标恢复窗口。
 
 `docker-desktop` 与 `docker-desktop-data` 是内部发行版，不会进入 WSL 扫描；Docker 映射到 Windows 的监听端口仍会由 Windows 扫描发现。
@@ -41,6 +43,6 @@ WSL 可以生成 NSIS `setup.exe`；MSI 仍要求在 Windows 上使用 WiX 构�
 
 ## 扫描与终止边界
 
-WSL 扫描通过 `wsl.exe --list --running --quiet` 获取已运行发行版，再以 root 读取 `ss` 和 `/proc`；不会为了扫描而启动已停止的发行版。发行版缺少 `ss` 时，界面会明确提示安装 `iproute2`。
+WSL 扫描通过 `wsl.exe --list --running --quiet` 获取已运行发行版，再以 root 读取 `ss`、`/proc` 与 cgroup；不会为了扫描而启动已停止的发行版。发行版缺少 `ss` 时，界面会明确提示安装 `iproute2`。
 
-终止 Windows 服务使用 `taskkill /T /F`，终止 WSL 服务会先向目标及其后代发送 `TERM`，短暂等待后仅对仍存活的同一进程树发送 `KILL`。Windows 受保护进程仍可能要求以管理员身份运行 Port Deck。
+终止 Windows 资源使用 `taskkill /T /F`，终止普通 WSL 资源会先向目标及其后代发送 `TERM`，短暂等待后仅对仍存活的同一进程树发送 `KILL`。如果进程属于 systemd unit，则改为调用 system manager 或对应用户的 user manager 停止 unit。所有路径都会再次校验进程身份；后端也会拒绝结束 `sshd`。Windows 受保护进程仍可能要求以管理员身份运行 Port Deck。

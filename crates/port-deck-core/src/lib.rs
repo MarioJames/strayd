@@ -19,6 +19,22 @@ pub enum RuntimeKind {
     Node,
     Bun,
     Deno,
+    Cloudflared,
+    Ngrok,
+    SshTunnel,
+    Frp,
+    LocalTunnel,
+    Bore,
+    Sshd,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResourceKind {
+    Development,
+    Tunnel,
+    System,
     Other,
 }
 
@@ -44,7 +60,9 @@ pub struct ServiceProcess {
     pub cwd: Option<String>,
     pub project_name: Option<String>,
     pub runtime: RuntimeKind,
-    pub is_dev_server: bool,
+    pub resource_kind: ResourceKind,
+    pub can_terminate: bool,
+    pub manager_unit: Option<String>,
     pub start_token: String,
 }
 
@@ -52,6 +70,16 @@ pub struct ServiceProcess {
 pub struct NativeListenerRecord {
     pub port: u16,
     pub host: String,
+    pub pid: u32,
+    pub parent_pid: u32,
+    pub process_name: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub start_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeProcessRecord {
     pub pid: u32,
     pub parent_pid: u32,
     pub process_name: String,
@@ -105,8 +133,42 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
 
 pub fn classify_runtime(process_name: &str, command: &str) -> RuntimeKind {
     let value = format!("{process_name} {command}").to_ascii_lowercase();
+    let executable = process_name
+        .trim_matches(['"', '\''])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(process_name)
+        .to_ascii_lowercase();
 
-    if contains_any(
+    if matches!(executable.as_str(), "cloudflared" | "cloudflared.exe") {
+        RuntimeKind::Cloudflared
+    } else if matches!(executable.as_str(), "ngrok" | "ngrok.exe") {
+        RuntimeKind::Ngrok
+    } else if matches!(executable.as_str(), "frpc" | "frpc.exe") {
+        RuntimeKind::Frp
+    } else if matches!(executable.as_str(), "bore" | "bore.exe") && value.contains("bore local") {
+        RuntimeKind::Bore
+    } else if (matches!(executable.as_str(), "lt" | "lt.cmd" | "lt.exe")
+        || contains_any(
+            &value,
+            &[
+                "localtunnel",
+                "node_modules/.bin/lt",
+                "node_modules\\.bin\\lt",
+            ],
+        ))
+        && contains_any(&value, &[" --port", " -p "])
+    {
+        RuntimeKind::LocalTunnel
+    } else if matches!(
+        executable.as_str(),
+        "ssh" | "ssh.exe" | "autossh" | "autossh.exe"
+    ) && has_reverse_forward(&value)
+    {
+        RuntimeKind::SshTunnel
+    } else if matches!(executable.as_str(), "sshd" | "sshd.exe") {
+        RuntimeKind::Sshd
+    } else if contains_any(
         &value,
         &[
             "next-server",
@@ -193,6 +255,24 @@ pub fn classify_runtime(process_name: &str, command: &str) -> RuntimeKind {
     }
 }
 
+pub fn resource_kind_for(runtime: &RuntimeKind) -> ResourceKind {
+    match runtime {
+        RuntimeKind::Cloudflared
+        | RuntimeKind::Ngrok
+        | RuntimeKind::SshTunnel
+        | RuntimeKind::Frp
+        | RuntimeKind::LocalTunnel
+        | RuntimeKind::Bore => ResourceKind::Tunnel,
+        RuntimeKind::Sshd => ResourceKind::System,
+        RuntimeKind::Other => ResourceKind::Other,
+        _ => ResourceKind::Development,
+    }
+}
+
+pub fn can_terminate_runtime(runtime: &RuntimeKind) -> bool {
+    !matches!(runtime, RuntimeKind::Sshd)
+}
+
 pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProcess> {
     #[derive(Debug)]
     struct ProcessMetadata {
@@ -200,6 +280,7 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
         process_name: String,
         command: String,
         cwd: Option<String>,
+        manager_unit: Option<String>,
         start_token: String,
     }
 
@@ -208,8 +289,8 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
 
     for record in snapshot.split('\x1e') {
         if let Some(payload) = record.strip_prefix("P\x1f") {
-            let fields = payload.splitn(4, '\x1f').collect::<Vec<_>>();
-            if fields.len() != 4 {
+            let fields = payload.splitn(5, '\x1f').collect::<Vec<_>>();
+            if fields.len() != 5 {
                 continue;
             }
             let Ok(pid) = fields[0].parse::<u32>() else {
@@ -219,13 +300,16 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
                 continue;
             };
             let cwd = normalized_optional(fields[2]);
+            let manager_unit =
+                normalized_optional(fields[3]).filter(|unit| is_safe_service_unit(unit));
             processes.insert(
                 pid,
                 ProcessMetadata {
                     parent_pid,
                     process_name,
-                    command: fields[3].trim().to_owned(),
+                    command: fields[4].trim().to_owned(),
                     cwd,
+                    manager_unit,
                     start_token,
                 },
             );
@@ -245,6 +329,8 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
             continue;
         };
         let runtime = classify_runtime(&metadata.process_name, &metadata.command);
+        let resource_kind = resource_kind_for(&runtime);
+        let can_terminate = can_terminate_runtime(&runtime);
         let service = grouped.entry(pid).or_insert_with(|| ServiceProcess {
             id: format!("wsl:{distribution}:{pid}:{}", metadata.start_token),
             origin: ProcessOrigin::Wsl,
@@ -257,22 +343,66 @@ pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProc
             command: metadata.command.clone(),
             cwd: metadata.cwd.clone(),
             project_name: metadata.cwd.as_deref().and_then(project_name),
-            is_dev_server: runtime != RuntimeKind::Other,
             runtime,
+            resource_kind,
+            can_terminate,
+            manager_unit: metadata.manager_unit.clone(),
             start_token: metadata.start_token.clone(),
         });
         push_listener(service, port, host);
+    }
+
+    for (pid, metadata) in processes {
+        if grouped.contains_key(&pid) {
+            continue;
+        }
+        let runtime = classify_runtime(&metadata.process_name, &metadata.command);
+        if resource_kind_for(&runtime) != ResourceKind::Tunnel {
+            continue;
+        }
+        let resource_kind = resource_kind_for(&runtime);
+        let can_terminate = can_terminate_runtime(&runtime);
+        grouped.insert(
+            pid,
+            ServiceProcess {
+                id: format!("wsl:{distribution}:{pid}:{}", metadata.start_token),
+                origin: ProcessOrigin::Wsl,
+                distribution: Some(distribution.to_owned()),
+                pid,
+                parent_pid: metadata.parent_pid,
+                ports: Vec::new(),
+                hosts: Vec::new(),
+                process_name: metadata.process_name,
+                command: metadata.command,
+                cwd: metadata.cwd.clone(),
+                project_name: metadata.cwd.as_deref().and_then(project_name),
+                runtime,
+                resource_kind,
+                can_terminate,
+                manager_unit: metadata.manager_unit,
+                start_token: metadata.start_token,
+            },
+        );
     }
 
     finish_grouping(grouped)
 }
 
 pub fn group_native_listeners(records: Vec<NativeListenerRecord>) -> Vec<ServiceProcess> {
+    group_native_resources(records, Vec::new())
+}
+
+pub fn group_native_resources(
+    records: Vec<NativeListenerRecord>,
+    processes: Vec<NativeProcessRecord>,
+) -> Vec<ServiceProcess> {
     let mut grouped = BTreeMap::<(u32, String), ServiceProcess>::new();
 
     for record in records {
         let key = (record.pid, record.start_token.clone());
         let runtime = classify_runtime(&record.process_name, &record.command);
+        let resource_kind = resource_kind_for(&runtime);
+        let can_terminate = can_terminate_runtime(&runtime);
         let service = grouped.entry(key).or_insert_with(|| ServiceProcess {
             id: format!("windows:{}:{}", record.pid, record.start_token),
             origin: ProcessOrigin::Windows,
@@ -285,11 +415,47 @@ pub fn group_native_listeners(records: Vec<NativeListenerRecord>) -> Vec<Service
             command: record.command.clone(),
             cwd: record.cwd.clone(),
             project_name: record.cwd.as_deref().and_then(project_name),
-            is_dev_server: runtime != RuntimeKind::Other,
             runtime,
+            resource_kind,
+            can_terminate,
+            manager_unit: None,
             start_token: record.start_token.clone(),
         });
         push_listener(service, record.port, record.host);
+    }
+
+    for process in processes {
+        let key = (process.pid, process.start_token.clone());
+        if grouped.contains_key(&key) {
+            continue;
+        }
+        let runtime = classify_runtime(&process.process_name, &process.command);
+        let resource_kind = resource_kind_for(&runtime);
+        if resource_kind != ResourceKind::Tunnel {
+            continue;
+        }
+        let can_terminate = can_terminate_runtime(&runtime);
+        grouped.insert(
+            key,
+            ServiceProcess {
+                id: format!("windows:{}:{}", process.pid, process.start_token),
+                origin: ProcessOrigin::Windows,
+                distribution: None,
+                pid: process.pid,
+                parent_pid: process.parent_pid,
+                ports: Vec::new(),
+                hosts: Vec::new(),
+                process_name: process.process_name,
+                command: process.command,
+                cwd: process.cwd.clone(),
+                project_name: process.cwd.as_deref().and_then(project_name),
+                runtime,
+                resource_kind,
+                can_terminate,
+                manager_unit: None,
+                start_token: process.start_token,
+            },
+        );
     }
 
     finish_grouping(grouped)
@@ -306,8 +472,31 @@ pub fn ensure_process_identity(
     }
 }
 
+pub fn is_safe_service_unit(unit: &str) -> bool {
+    !unit.is_empty()
+        && unit.len() <= 255
+        && unit.ends_with(".service")
+        && unit
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        && unit.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '_' | '-' | '.' | '@' | ':' | '\\')
+        })
+}
+
 fn contains_any(value: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|pattern| value.contains(pattern))
+}
+
+fn has_reverse_forward(command: &str) -> bool {
+    command.split_whitespace().any(|argument| {
+        argument == "-r"
+            || (argument.starts_with("-r") && argument.len() > 2)
+            || argument.starts_with("remoteforward=")
+            || argument.starts_with("-oremoteforward=")
+    })
 }
 
 fn normalized_optional(value: &str) -> Option<String> {
@@ -382,6 +571,14 @@ fn finish_grouping<K: Ord>(grouped: BTreeMap<K, ServiceProcess>) -> Vec<ServiceP
         listeners.sort_unstable_by_key(|(port, _)| *port);
         (service.ports, service.hosts) = listeners.into_iter().unzip();
     }
-    services.sort_by_key(|service| service.ports.first().copied().unwrap_or_default());
+    services.sort_by_key(|service| {
+        let kind = match service.resource_kind {
+            ResourceKind::Development => 0,
+            ResourceKind::Tunnel => 1,
+            ResourceKind::System => 2,
+            ResourceKind::Other => 3,
+        };
+        (kind, service.ports.first().copied().unwrap_or_default())
+    });
     services
 }

@@ -4,18 +4,24 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use port_deck_core::{ProcessOrigin, ServiceProcess, decode_command_output, parse_wsl_snapshot};
+use port_deck_core::{
+    ProcessOrigin, ResourceKind, ServiceProcess, decode_command_output, is_safe_service_unit,
+    parse_wsl_snapshot,
+};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "windows")]
 use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState, get_sockets_info};
 #[cfg(target_os = "windows")]
-use port_deck_core::{NativeListenerRecord, ensure_process_identity, group_native_listeners};
+use port_deck_core::{
+    NativeListenerRecord, NativeProcessRecord, RuntimeKind, classify_runtime,
+    ensure_process_identity, group_native_resources,
+};
 #[cfg(target_os = "windows")]
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 const WSL_SNAPSHOT_SCRIPT: &str = r#"
-printf 'PORTDECK/1\036'
+printf 'PORTDECK/2\036'
 if ! command -v ss >/dev/null 2>&1; then
   printf 'E\037iproute2-not-installed\036'
   exit 0
@@ -28,15 +34,17 @@ for proc in /proc/[0-9]*; do
   pid=${proc##*/}
   stat=$(cat "$proc/stat" 2>/dev/null) || continue
   cwd=$(readlink "$proc/cwd" 2>/dev/null | tr '\036\037' '  ')
+  unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "$proc/cgroup" 2>/dev/null | tail -n 1 | tr '\036\037' '  ')
   command=$(tr '\000\036\037' '   ' < "$proc/cmdline" 2>/dev/null)
   [ -n "$command" ] || continue
-  printf 'P\037%s\037%s\037%s\037%s\036' "$pid" "$stat" "$cwd" "$command"
+  printf 'P\037%s\037%s\037%s\037%s\037%s\036' "$pid" "$stat" "$cwd" "$unit" "$command"
 done
 "#;
 
 const WSL_TERMINATE_SCRIPT: &str = r#"
 pid=$1
 expected=$2
+unit=$3
 case "$pid" in (*[!0-9]*|'') exit 46;; esac
 [ "$pid" -gt 1 ] || exit 46
 stat=$(cat "/proc/$pid/stat" 2>/dev/null) || exit 45
@@ -45,6 +53,32 @@ set -- $rest
 shift 19
 current=$1
 [ "$current" = "$expected" ] || exit 44
+comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+case "$comm" in (sshd|sshd.exe) exit 48;; esac
+if [ -n "$unit" ]; then
+  case "$unit" in
+    (*[!A-Za-z0-9_.@:\\-]*|[!A-Za-z0-9]*) exit 47;;
+    (*.service) ;;
+    (*) exit 47;;
+  esac
+  found=0
+  user_unit=0
+  while IFS= read -r cgroup; do
+    path=${cgroup#*:*:}
+    case "/$path/" in (*"/$unit/"*) found=1;; esac
+    case "$path" in (/user.slice/*) user_unit=1;; esac
+  done < "/proc/$pid/cgroup"
+  [ "$found" -eq 1 ] || exit 47
+  if [ "$user_unit" -eq 1 ]; then
+    uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$pid/status")
+    user=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)
+    [ -n "$user" ] || exit 49
+    runuser -u "$user" -- env "XDG_RUNTIME_DIR=/run/user/$uid" systemctl --user stop -- "$unit" || exit 49
+  else
+    systemctl stop -- "$unit" || exit 49
+  fi
+  exit 0
+fi
 children_of() {
   wanted=$1
   for status in /proc/[0-9]*/status; do
@@ -81,6 +115,7 @@ pub struct TerminateRequest {
     pub distribution: Option<String>,
     pub pid: u32,
     pub start_token: String,
+    pub manager_unit: Option<String>,
 }
 
 pub fn scan_all() -> ScanSnapshot {
@@ -121,10 +156,13 @@ pub fn scan_all() -> ScanSnapshot {
     }
 
     services.sort_by_key(|service| {
-        (
-            !service.is_dev_server,
-            service.ports.first().copied().unwrap_or_default(),
-        )
+        let kind = match service.resource_kind {
+            ResourceKind::Development => 0,
+            ResourceKind::Tunnel => 1,
+            ResourceKind::System => 2,
+            ResourceKind::Other => 3,
+        };
+        (kind, service.ports.first().copied().unwrap_or_default())
     });
 
     ScanSnapshot {
@@ -143,6 +181,13 @@ pub fn terminate(request: TerminateRequest) -> Result<(), String> {
     }
     if request.start_token.is_empty() {
         return Err("缺少进程启动标识，请重新扫描".into());
+    }
+    if request
+        .manager_unit
+        .as_deref()
+        .is_some_and(|unit| !is_safe_service_unit(unit))
+    {
+        return Err("systemd 服务名称无效，请重新扫描".into());
     }
 
     match request.origin {
@@ -217,6 +262,7 @@ fn terminate_wsl(request: &TerminateRequest) -> Result<(), String> {
             "port-deck",
             &pid,
             &request.start_token,
+            request.manager_unit.as_deref().unwrap_or_default(),
         ])
         .output()
         .map_err(|error| format!("无法调用 WSL: {error}"))?;
@@ -226,6 +272,9 @@ fn terminate_wsl(request: &TerminateRequest) -> Result<(), String> {
         Some(44) => Err("进程已经变化，请重新扫描后再操作".into()),
         Some(45) => Err("进程已经结束".into()),
         Some(46) => Err("进程号无效".into()),
+        Some(47) => Err("systemd 托管关系已经变化，请重新扫描后再操作".into()),
+        Some(48) => Err("sshd 是受保护的远程入口，Port Deck 不会结束它".into()),
+        Some(49) => Err(command_error("停止 systemd 隧道服务", &output)),
         _ => Err(command_error("结束 WSL 进程", &output)),
     }
 }
@@ -248,7 +297,7 @@ fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
     )
     .map_err(|error| error.to_string())?;
     let own_pid = std::process::id();
-    let mut records = Vec::new();
+    let mut listener_records = Vec::new();
 
     for socket in sockets {
         let ProtocolSocketInfo::Tcp(tcp) = socket.protocol_socket_info else {
@@ -270,7 +319,7 @@ fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
                 .map(|part| part.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join(" ");
-            records.push(NativeListenerRecord {
+            listener_records.push(NativeListenerRecord {
                 port: tcp.local_port,
                 host: tcp.local_addr.to_string(),
                 pid,
@@ -288,7 +337,36 @@ fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
         }
     }
 
-    Ok(group_native_listeners(records))
+    let process_records = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let pid = pid.as_u32();
+            if pid <= 4 || pid == own_pid {
+                return None;
+            }
+            Some(NativeProcessRecord {
+                pid,
+                parent_pid: process
+                    .parent()
+                    .map(|value| value.as_u32())
+                    .unwrap_or_default(),
+                process_name: process.name().to_string_lossy().into_owned(),
+                command: process
+                    .cmd()
+                    .iter()
+                    .map(|part| part.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cwd: process
+                    .cwd()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                start_token: process.start_time().to_string(),
+            })
+        })
+        .collect();
+
+    Ok(group_native_resources(listener_records, process_records))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -310,6 +388,19 @@ fn terminate_native(request: &TerminateRequest) -> Result<(), String> {
         .map(|process| process.start_time().to_string());
     ensure_process_identity(&request.start_token, actual.as_deref())
         .map_err(|error| format!("{error}，请重新扫描"))?;
+
+    let process = system
+        .process(pid)
+        .ok_or_else(|| "进程已经结束，请重新扫描".to_string())?;
+    let command = process
+        .cmd()
+        .iter()
+        .map(|part| part.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if classify_runtime(&process.name().to_string_lossy(), &command) == RuntimeKind::Sshd {
+        return Err("sshd 是受保护的远程入口，Port Deck 不会结束它".into());
+    }
 
     let output = quiet_command("taskkill.exe")
         .args(["/PID", &request.pid.to_string(), "/T", "/F"])

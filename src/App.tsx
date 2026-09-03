@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Box,
+  Cable,
   Check,
   ChevronDown,
   CircleStop,
@@ -11,17 +12,19 @@ import {
   RefreshCw,
   Search,
   Server,
+  Settings2,
+  ShieldCheck,
   TerminalSquare,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { openService, scanServices, terminateService } from './api';
-import type { ProcessOrigin, RuntimeKind, ScanSnapshot, ServiceProcess } from './types';
+import type { ProcessOrigin, ResourceKind, RuntimeKind, ScanSnapshot, ServiceProcess } from './types';
 import './styles.css';
 
 type Scope = 'all' | ProcessOrigin;
-type ServiceFilter = 'all' | 'dev';
+type ResourceFilter = 'managed' | ResourceKind | 'all';
 
 const runtimeLabels: Record<RuntimeKind, string> = {
   nextJs: 'Next.js',
@@ -38,7 +41,21 @@ const runtimeLabels: Record<RuntimeKind, string> = {
   node: 'Node.js',
   bun: 'Bun',
   deno: 'Deno',
+  cloudflared: 'Cloudflare Tunnel',
+  ngrok: 'ngrok',
+  sshTunnel: 'SSH 反向隧道',
+  frp: 'frp Client',
+  localTunnel: 'localtunnel',
+  bore: 'bore',
+  sshd: 'SSH Server',
   other: '其他服务',
+};
+
+const resourceLabels: Record<ResourceKind, string> = {
+  development: '开发服务',
+  tunnel: '公网隧道',
+  system: '系统服务',
+  other: '其他进程',
 };
 
 function formatScanTime(timestamp: number) {
@@ -60,9 +77,32 @@ function includesQuery(service: ServiceProcess, query: string) {
     service.processName,
     service.command,
     service.cwd,
+    service.managerUnit,
     runtimeLabels[service.runtime],
+    resourceLabels[service.resourceKind],
     ...service.ports.map(String),
   ].some((value) => value?.toLocaleLowerCase().includes(needle));
+}
+
+function resourceName(service: ServiceProcess) {
+  if (service.resourceKind === 'system') return runtimeLabels[service.runtime];
+  if (service.resourceKind === 'tunnel') {
+    if (service.managerUnit) return service.managerUnit.replace(/\.service$/, '');
+    if (service.projectName) return `${service.projectName} 隧道`;
+    return runtimeLabels[service.runtime];
+  }
+  return service.projectName || service.processName;
+}
+
+function railContent(service: ServiceProcess) {
+  if (service.resourceKind === 'tunnel') return { label: 'PUBLIC', value: 'TUNNEL' };
+  if (service.resourceKind === 'system') {
+    return { label: 'SYSTEM', value: service.ports[0] ? `:${service.ports[0]}` : 'SSHD' };
+  }
+  return {
+    label: service.ports.length ? 'PORT' : 'PROCESS',
+    value: service.ports[0] ? `:${service.ports[0]}` : 'ACTIVE',
+  };
 }
 
 function OriginMark({ origin }: { origin: ProcessOrigin }) {
@@ -73,8 +113,8 @@ function EmptyState({ query }: { query: string }) {
   return (
     <div className="empty-state">
       <div className="empty-icon"><Network size={26} /></div>
-      <h2>{query ? '没有匹配的监听端口' : '没有发现监听服务'}</h2>
-      <p>{query ? '换一个端口、项目名或进程名试试。' : '启动开发服务后，Port Deck 会自动发现它。'}</p>
+      <h2>{query ? '没有匹配的运行资源' : '没有发现运行资源'}</h2>
+      <p>{query ? '换一个端口、项目名、隧道或进程名试试。' : '启动开发服务或临时隧道后，Port Deck 会自动发现它。'}</p>
     </div>
   );
 }
@@ -82,7 +122,7 @@ function EmptyState({ query }: { query: string }) {
 export default function App() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot>({ services: [], warnings: [], scannedAt: 0 });
   const [scope, setScope] = useState<Scope>('all');
-  const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('dev');
+  const [resourceFilter, setResourceFilter] = useState<ResourceFilter>('managed');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,13 +175,14 @@ export default function App() {
 
   const filteredServices = useMemo(() => snapshot.services.filter((service) => {
     if (scope !== 'all' && service.origin !== scope) return false;
-    if (serviceFilter === 'dev' && !service.isDevServer && !query.trim()) return false;
+    if (resourceFilter === 'managed' && service.resourceKind === 'other') return false;
+    if (resourceFilter !== 'all' && resourceFilter !== 'managed' && service.resourceKind !== resourceFilter) return false;
     return includesQuery(service, query);
-  }), [query, scope, serviceFilter, snapshot.services]);
+  }), [query, resourceFilter, scope, snapshot.services]);
 
   const portCount = snapshot.services.reduce((sum, service) => sum + service.ports.length, 0);
-  const wslCount = snapshot.services.filter((service) => service.origin === 'wsl').length;
-  const windowsCount = snapshot.services.length - wslCount;
+  const tunnelCount = snapshot.services.filter((service) => service.resourceKind === 'tunnel').length;
+  const sshdCount = snapshot.services.filter((service) => service.runtime === 'sshd').length;
 
   const armTermination = (service: ServiceProcess) => {
     if (armTimer.current) window.clearTimeout(armTimer.current);
@@ -158,13 +199,14 @@ export default function App() {
         distribution: service.distribution,
         pid: service.pid,
         startToken: service.startToken,
+        managerUnit: service.managerUnit,
       });
       stoppedIds.current.add(service.id);
       setSnapshot((current) => ({
         ...current,
         services: current.services.filter((item) => item.id !== service.id),
       }));
-      setToast(`已结束 ${service.projectName || service.processName}`);
+      setToast(`${service.resourceKind === 'tunnel' ? '已关闭' : '已结束'} ${resourceName(service)}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -180,7 +222,7 @@ export default function App() {
         </div>
         <div className="brand-copy">
           <h1>Port Deck</h1>
-          <p>本地开发端口控制台</p>
+          <p>本地运行资源控制台</p>
         </div>
         <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'spin' : ''} />
@@ -193,25 +235,25 @@ export default function App() {
           <span className="live-dot" />
           <div>
             <strong>{snapshot.services.length}</strong>
-            <span>个服务</span>
+            <span>个资源</span>
           </div>
         </div>
         <div className="metric"><span>监听端口</span><strong>{portCount}</strong></div>
-        <div className="metric"><span>WSL</span><strong>{wslCount}</strong></div>
-        <div className="metric"><span>Windows</span><strong>{windowsCount}</strong></div>
+        <div className="metric"><span>公网隧道</span><strong>{tunnelCount}</strong></div>
+        <div className="metric"><span>SSH 服务</span><strong>{sshdCount}</strong></div>
         <div className="scan-time">
           {snapshot.scannedAt ? `最后扫描 ${formatScanTime(snapshot.scannedAt)}` : '正在建立进程索引'}
         </div>
       </section>
 
-      <section className="toolbar" aria-label="筛选服务">
+      <section className="toolbar" aria-label="筛选运行资源">
         <label className="search-box">
           <Search size={17} />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索端口、项目、进程或路径"
-            aria-label="搜索服务"
+            placeholder="搜索端口、项目、隧道、进程或路径"
+            aria-label="搜索运行资源"
           />
           {query && <button onClick={() => setQuery('')} aria-label="清除搜索"><X size={15} /></button>}
         </label>
@@ -223,9 +265,12 @@ export default function App() {
           ))}
         </div>
         <label className="select-wrap">
-          <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as ServiceFilter)}>
-            <option value="all">全部端口</option>
-            <option value="dev">仅开发服务</option>
+          <select value={resourceFilter} onChange={(event) => setResourceFilter(event.target.value as ResourceFilter)}>
+            <option value="managed">主要资源</option>
+            <option value="development">开发服务</option>
+            <option value="tunnel">公网隧道</option>
+            <option value="system">系统服务</option>
+            <option value="all">全部进程</option>
           </select>
           <ChevronDown size={14} />
         </label>
@@ -249,11 +294,15 @@ export default function App() {
         ) : filteredServices.length === 0 ? (
           <EmptyState query={query} />
         ) : (
-          filteredServices.map((service, index) => (
-            <article className={`service-card origin-${service.origin}`} key={service.id} style={{ '--row-index': index } as React.CSSProperties}>
-              <div className="port-rail">
-                <span className="port-label">PORT</span>
-                <strong>:{service.ports[0]}</strong>
+          filteredServices.map((service, index) => {
+            const rail = railContent(service);
+            const canOpen = service.resourceKind === 'development' && service.ports.length > 0;
+            const stopLabel = service.resourceKind === 'tunnel' ? '关闭隧道' : '结束进程';
+            return (
+            <article className={`service-card origin-${service.origin} kind-${service.resourceKind}`} key={service.id} style={{ '--row-index': index } as React.CSSProperties}>
+              <div className="resource-rail">
+                <span className="resource-label">{rail.label}</span>
+                <strong>{rail.value}</strong>
                 {service.ports.length > 1 && <span className="extra-ports">+{service.ports.length - 1}</span>}
               </div>
 
@@ -261,38 +310,43 @@ export default function App() {
                 <div className="service-heading">
                   <div>
                     <div className="title-line">
-                      <h2>{service.projectName || service.processName}</h2>
+                      <h2>{resourceName(service)}</h2>
                       <span className={`runtime runtime-${service.runtime}`}>{runtimeLabels[service.runtime]}</span>
                     </div>
                     <div className="source-line">
                       <span><OriginMark origin={service.origin} />{service.origin === 'wsl' ? `WSL · ${service.distribution}` : 'Windows'}</span>
                       <span>PID {service.pid}</span>
-                      {service.ports.length > 1 && <span>{service.ports.join(' · ')}</span>}
+                      {service.ports.length > 1 && <span>端口 {service.ports.join(' · ')}</span>}
                     </div>
                   </div>
                   <div className="card-actions">
-                    <button className="icon-button" title="在浏览器中打开" aria-label={`打开 ${service.ports[0]} 端口`} onClick={() => void openService(service.ports[0])}>
+                    {canOpen && <button className="icon-button" title="在浏览器中打开" aria-label={`打开 ${service.ports[0]} 端口`} onClick={() => void openService(service.ports[0])}>
                       <ArrowUpRight size={17} />
-                    </button>
-                    {armedId === service.id ? (
+                    </button>}
+                    {!service.canTerminate ? (
+                      <span className="protected-status" title="为避免断开远程连接，Port Deck 不会结束 sshd">
+                        <ShieldCheck size={15} />受保护
+                      </span>
+                    ) : armedId === service.id ? (
                       <button className="stop-button confirm" onClick={() => void stopService(service)} disabled={terminatingId === service.id}>
                         {terminatingId === service.id ? <LoaderCircle className="spin" size={16} /> : <CircleStop size={16} />}
-                        确认结束
+                        确认{service.resourceKind === 'tunnel' ? '关闭' : '结束'}
                       </button>
                     ) : (
                       <button className="stop-button" onClick={() => armTermination(service)}>
-                        <CircleStop size={16} />结束进程
+                        <CircleStop size={16} />{stopLabel}
                       </button>
                     )}
                   </div>
                 </div>
                 <div className="process-details">
+                  {service.managerUnit && <div className="manager-detail"><Settings2 size={14} /><code title={service.managerUnit}>systemd · {service.managerUnit}</code></div>}
                   <div><Box size={14} /><code title={service.cwd || ''}>{service.cwd || '工作目录不可用'}</code></div>
-                  <div><Server size={14} /><code title={service.command}>{service.command}</code></div>
+                  <div>{service.resourceKind === 'tunnel' ? <Cable size={14} /> : <Server size={14} />}<code title={service.command}>{service.command}</code></div>
                 </div>
               </div>
             </article>
-          ))
+          );})
         )}
       </section>
 
