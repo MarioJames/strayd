@@ -4,16 +4,16 @@
   <rect width="1200" height="720" rx="24" fill="#070b12"/>
   <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
   <text x="46" y="36" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">STRAYD / TERMINAL CONTROL</text>
-  <rect x="46" y="50" width="277" height="18" rx="5" fill="#3dd6d0"/>
-  <text x="184" y="64" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   ALL</text>
-  <text x="461" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   DEV SERVERS</text>
-  <text x="738" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   TUNNELS</text>
-  <text x="1015" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   SYSTEM SERVICES</text>
+  <rect x="46" y="44" width="277" height="24" rx="5" fill="#3dd6d0"/>
+  <text x="184" y="62" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   ALL</text>
+  <text x="461" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   DEV SERVERS</text>
+  <text x="738" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   TUNNELS</text>
+  <text x="1015" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   SYSTEM SERVICES</text>
 
   <rect x="24" y="92" width="430" height="526" rx="12" fill="#0b1019" stroke="#354050"/>
   <text x="46" y="124" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">RESOURCES / 4</text>
-  <rect x="38" y="142" width="402" height="92" rx="9" fill="#19283a"/>
-  <rect x="38" y="142" width="5" height="92" rx="2" fill="#3dd6d0"/>
+  <rect x="40" y="142" width="398" height="92" rx="9" fill="#19283a"/>
+  <rect x="40" y="142" width="5" height="92" rx="2" fill="#3dd6d0"/>
   <text x="60" y="179" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" font-weight="700">:5000</text>
   <text x="150" y="179" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">storefront</text>
   <text x="60" y="211" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2 items / 1 tunnel</text>
@@ -58,8 +58,8 @@
   <text x="596" y="460" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">localhost:5000</text>
   <text x="494" y="491" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">command</text>
   <text x="596" y="491" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">cloudflared tunnel --url http://localhost:5000</text>
-  <rect x="494" y="512" width="654" height="28" rx="4" fill="#3dd6d0"/>
-  <text x="821" y="532" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">COPY COMMAND</text>
+  <rect x="494" y="520" width="654" height="28" rx="4" fill="#3dd6d0"/>
+  <text x="821" y="540" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">COPY COMMAND</text>
 
   <rect x="24" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="114" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h   HIDE</text>
   <rect x="214" y="640" width="180" height="34" rx="5" fill="#ff657c"/><text x="304" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">s   STOP GROUP</text>

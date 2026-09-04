@@ -42,7 +42,7 @@ const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
 const GROUP_ITEM_HEIGHT: u16 = 3;
 const RULE_ITEM_HEIGHT: u16 = 3;
-const TAB_HEIGHT: u16 = 4;
+const TAB_HEIGHT: u16 = 3;
 const FOOTER_HEIGHT: u16 = 2;
 const FOOTER_ACTION_HEIGHT: u16 = 1;
 const MAIN_PANEL_TOP_PADDING: u16 = 1;
@@ -906,7 +906,7 @@ impl App {
     }
 
     fn draw_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let action_row = Rect::new(area.x, area.y, area.width, FOOTER_ACTION_HEIGHT);
+        let action_row = footer_action_row(area);
         let actions = footer_actions(self.tab);
         let action_areas = footer_action_areas(action_row, actions.len());
         let compact = action_areas.first().is_some_and(|area| area.width < 15);
@@ -1072,7 +1072,7 @@ impl UiRegions {
         );
         let tab_row = Rect::new(
             tabs_area.x.saturating_add(PANEL_TITLE_LEFT_INSET),
-            tabs_area.y.saturating_add(1 + MAIN_PANEL_TOP_PADDING),
+            tabs_area.y.saturating_add(1),
             tabs_area
                 .width
                 .saturating_sub(PANEL_TITLE_LEFT_INSET.saturating_mul(2)),
@@ -1089,12 +1089,7 @@ impl UiRegions {
         .enumerate()
         .map(|(index, tab)| (tab_areas[index], tab))
         .collect();
-        let action_row = Rect::new(
-            footer_area.x,
-            footer_area.y,
-            footer_area.width,
-            FOOTER_ACTION_HEIGHT,
-        );
+        let action_row = footer_action_row(footer_area);
         let actions = footer_actions(tab);
         let footer_areas = footer_action_areas(action_row, actions.len());
         let footer_actions = actions
@@ -1260,6 +1255,10 @@ fn footer_actions(_tab: TabTarget) -> Vec<MouseAction> {
         MouseAction::Refresh,
         MouseAction::Quit,
     ]
+}
+
+fn footer_action_row(area: Rect) -> Rect {
+    Rect::new(area.x, area.y, area.width, FOOTER_ACTION_HEIGHT)
 }
 
 fn footer_action_areas(area: Rect, count: usize) -> Vec<Rect> {
@@ -1717,6 +1716,7 @@ fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> DetailCo
                 Span::raw(command_line),
             ]));
         }
+        lines.push(Line::from(""));
         let copy_row = lines.len() as u16;
         lines.push(solid_button_line(
             tr.text("tui_copy_command_button"),
@@ -2096,24 +2096,28 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(3, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(3, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(50, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(50, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(8, 9), 2, 8, false, false, false),
+            regions.action_at(mouse_down(8, 8), 2, 8, false, false, false),
             Some(MouseAction::Select(3))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 26), 0, 8, false, false, false),
-            Some(MouseAction::Select(6))
+            Some(MouseAction::Select(7))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
             Some(MouseAction::Stop)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(0, 28), 0, 8, false, false, false),
+            Some(MouseAction::Hide)
         );
         assert_eq!(
             regions.action_at(mouse_down(55, 28), 0, 8, false, false, false),
@@ -2190,23 +2194,23 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(18, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(18, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(38, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(38, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Dev))
         );
         assert_eq!(
-            regions.action_at(mouse_down(58, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(58, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(78, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(78, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::System))
         );
         assert_eq!(
-            regions.action_at(mouse_down(96, 2), 0, 8, false, false, false),
+            regions.action_at(mouse_down(96, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::System))
         );
     }

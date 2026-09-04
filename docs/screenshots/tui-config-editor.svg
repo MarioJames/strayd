@@ -4,11 +4,11 @@
   <rect width="1200" height="650" rx="24" fill="#070b12"/>
   <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
   <text x="46" y="37" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">STRAYD / 终端控制台</text>
-  <rect x="46" y="50" width="277" height="18" rx="5" fill="#3dd6d0"/>
-  <text x="184" y="64" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   全部</text>
-  <text x="461" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   开发服务器</text>
-  <text x="738" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   公网隧道</text>
-  <text x="1015" y="64" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   系统服务</text>
+  <rect x="46" y="44" width="277" height="24" rx="5" fill="#3dd6d0"/>
+  <text x="184" y="62" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   全部</text>
+  <text x="461" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   开发服务器</text>
+  <text x="738" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   公网隧道</text>
+  <text x="1015" y="62" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   系统服务</text>
 
   <rect x="24" y="92" width="430" height="474" rx="12" fill="#0b1019" stroke="#354050" opacity="0.72"/>
   <text x="48" y="126" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">资源 / 4</text>
