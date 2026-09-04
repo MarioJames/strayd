@@ -20,8 +20,6 @@ use port_deck_core::{
 #[cfg(target_os = "windows")]
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-const APPLICATION_DEV_PORT: u16 = 1420;
-
 const WSL_SNAPSHOT_SCRIPT: &str = r#"
 printf 'PORTDECK/2\036'
 if ! command -v ss >/dev/null 2>&1; then
@@ -121,6 +119,14 @@ pub struct TerminateRequest {
 }
 
 pub fn scan_all() -> ScanSnapshot {
+    scan_all_with_exclusion(None)
+}
+
+pub fn scan_all_excluding(application_name: &str, dev_port: u16) -> ScanSnapshot {
+    scan_all_with_exclusion(Some((application_name, dev_port)))
+}
+
+fn scan_all_with_exclusion(exclusion: Option<(&str, u16)>) -> ScanSnapshot {
     let native_scan = thread::spawn(scan_native_services);
     let mut warnings = Vec::new();
     let mut services = Vec::new();
@@ -157,9 +163,9 @@ pub fn scan_all() -> ScanSnapshot {
         Err(_) => warnings.push("Windows 扫描任务意外退出".into()),
     }
 
-    services.retain(|service| {
-        !is_application_dev_service(service, env!("CARGO_PKG_NAME"), APPLICATION_DEV_PORT)
-    });
+    if let Some((application_name, dev_port)) = exclusion {
+        services.retain(|service| !is_application_dev_service(service, application_name, dev_port));
+    }
 
     services.sort_by_key(|service| {
         let kind = match service.resource_kind {
@@ -200,6 +206,22 @@ pub fn terminate(request: TerminateRequest) -> Result<(), String> {
         ProcessOrigin::Windows => terminate_native(&request),
         ProcessOrigin::Wsl => terminate_wsl(&request),
     }
+}
+
+impl From<&ServiceProcess> for TerminateRequest {
+    fn from(service: &ServiceProcess) -> Self {
+        Self {
+            origin: service.origin.clone(),
+            distribution: service.distribution.clone(),
+            pid: service.pid,
+            start_token: service.start_token.clone(),
+            manager_unit: service.manager_unit.clone(),
+        }
+    }
+}
+
+pub fn terminate_service(service: &ServiceProcess) -> Result<(), String> {
+    terminate(TerminateRequest::from(service))
 }
 
 pub fn open_local_service(port: u16) -> Result<(), String> {

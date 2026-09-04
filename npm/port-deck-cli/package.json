@@ -1,0 +1,25 @@
+{
+  "name": "port-deck-cli",
+  "version": "0.1.0",
+  "description": "Interactive TUI and commands for managing Windows and WSL development services and tunnels",
+  "license": "UNLICENSED",
+  "bin": {
+    "port-deck": "bin/port-deck.cjs"
+  },
+  "files": [
+    "bin",
+    "native",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "tui",
+    "wsl",
+    "ports",
+    "development-server",
+    "cloudflare-tunnel"
+  ],
+  "preferGlobal": true
+}

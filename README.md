@@ -1,6 +1,31 @@
 # Port Deck
 
-Port Deck 是一个用 Tauri 2 与 Rust 编写的 Windows 托盘工具，用来发现并管理 Windows、WSL 中“启动后找不到在哪”的本地开发服务、临时公网隧道和 SSH 服务。
+Port Deck 是一个用 Rust 编写的 Windows / WSL 开发资源管理工具，同时提供可通过 npm 安装的终端 TUI 与 Tauri 2 Windows 托盘界面。它用来发现并管理“启动后找不到在哪”的本地开发服务、临时公网隧道和 SSH 服务。
+
+## npm CLI / TUI
+
+临时包名为 `port-deck-cli`。在仓库中生成同时包含 Windows x64 与 WSL/Linux x64 原生程序的 npm tarball：
+
+```bash
+bun run pack:cli
+npm install --global ./dist/npm/port-deck-cli-0.1.0.tgz
+port-deck
+```
+
+无子命令时进入 TUI，也可显式运行 `port-deck tui --tab tunnels --refresh 5`。TUI 使用 `Tab` 或 `1-4` 切页，`j/k` 选择，`d` 关闭开发服务，`t` 关闭隧道，`x` 关闭整个关联组，`r` 刷新，`q` 退出。
+
+脚本化命令：
+
+```bash
+port-deck list --kind tunnel
+port-deck list --port 5000 --json
+port-deck stop tunnel --port 5000 --dry-run
+port-deck stop tunnel --port 5000 --yes
+port-deck stop group --port 5000 --yes
+port-deck stop dev --project storefront --all --yes
+```
+
+`list` 与 `stop` 支持 `--id`、`--port/-p`、`--project`、`--origin windows|wsl`、`--distro` 和 `--runtime`。`stop` 匹配多项时必须显式传 `--all`，实际关闭前需要交互确认或传 `--yes`；`--dry-run` 只打印执行计划。
 
 ## 能做什么
 

@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:cli": "cargo build --release -p port-deck-cli --target-dir target/port-deck-cli-linux",
+    "build:cli:windows": "bash scripts/build-cli-windows.sh",
     "build:windows": "bash scripts/build-windows.sh",
+    "pack:cli": "bun run build:cli && bun run build:cli:windows && bun scripts/stage-npm-package.ts && cd npm/port-deck-cli && bun pm pack --destination ../../dist/npm",
     "preview": "vite preview",
-    "test": "cargo test -p port-deck-core",
+    "test": "cargo test --workspace",
     "tauri": "tauri"
   },
   "dependencies": {

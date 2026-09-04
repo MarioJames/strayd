@@ -1,6 +1,7 @@
 /node_modules/
 /dist/
 /target/
+/npm/port-deck-cli/native/
 /.browser-harness/
 /.cargo-xwin/
 *.log

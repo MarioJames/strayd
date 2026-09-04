@@ -1,30 +1,28 @@
-mod scanner;
-
 use tauri::{
     Emitter, Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
-use scanner::{ScanSnapshot, TerminateRequest};
+use port_deck_engine::{ScanSnapshot, TerminateRequest};
 
 #[tauri::command]
 async fn scan_services() -> Result<ScanSnapshot, String> {
-    tauri::async_runtime::spawn_blocking(scanner::scan_all)
+    tauri::async_runtime::spawn_blocking(|| port_deck_engine::scan_all_excluding("port-deck", 1420))
         .await
         .map_err(|error| format!("扫描任务失败: {error}"))
 }
 
 #[tauri::command]
 async fn terminate_service(request: TerminateRequest) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || scanner::terminate(request))
+    tauri::async_runtime::spawn_blocking(move || port_deck_engine::terminate(request))
         .await
         .map_err(|error| format!("结束任务失败: {error}"))?
 }
 
 #[tauri::command]
 fn open_service(port: u16) -> Result<(), String> {
-    scanner::open_local_service(port)
+    port_deck_engine::open_local_service(port)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

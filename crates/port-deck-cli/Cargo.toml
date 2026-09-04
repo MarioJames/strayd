@@ -1,0 +1,18 @@
+[package]
+name = "port-deck-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "port-deck"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+crossterm = "0.29"
+port-deck-core = { path = "../port-deck-core" }
+port-deck-engine = { path = "../port-deck-engine" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
