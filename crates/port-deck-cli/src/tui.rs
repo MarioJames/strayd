@@ -1,7 +1,9 @@
-use std::io::{self, IsTerminal, Stdout};
+use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -25,6 +27,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const CYAN: Color = Color::Rgb(61, 214, 208);
 const PURPLE: Color = Color::Rgb(171, 114, 255);
@@ -38,7 +41,10 @@ const TEXT: Color = Color::Rgb(247, 249, 252);
 const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
 const GROUP_ITEM_HEIGHT: u16 = 3;
-const RULE_ITEM_HEIGHT: u16 = 2;
+const RULE_ITEM_HEIGHT: u16 = 3;
+const TAB_HEIGHT: u16 = 3;
+const FOOTER_HEIGHT: u16 = 4;
+const FOOTER_ACTION_HEIGHT: u16 = 3;
 
 pub fn run(
     args: TuiArgs,
@@ -121,6 +127,9 @@ enum MouseAction {
     OpenSettings,
     CloseSettings,
     SelectText,
+    Refresh,
+    Quit,
+    CopyCommand(usize),
     RemoveRule,
     Confirm,
     Cancel,
@@ -152,6 +161,12 @@ struct UiRegions {
     settings_popup: Rect,
     settings_remove: Rect,
     settings_close: Rect,
+    command_copies: Vec<(Rect, String)>,
+}
+
+struct DetailContent {
+    text: Text<'static>,
+    commands: Vec<(u16, String)>,
 }
 
 struct PendingStop {
@@ -392,6 +407,24 @@ impl App {
                 self.status = self.tr.text("tui_settings_closed").into();
             }
             MouseAction::SelectText => self.open_text_selection(),
+            MouseAction::Refresh => self.refresh(),
+            MouseAction::Quit => self.should_quit = true,
+            MouseAction::CopyCommand(index) => {
+                let Some(command) = self
+                    .regions
+                    .command_copies
+                    .get(index)
+                    .map(|(_, command)| command.clone())
+                else {
+                    return;
+                };
+                self.status = match copy_to_terminal_clipboard(&command) {
+                    Ok(()) => self.tr.text("tui_command_copied").into(),
+                    Err(error) => self
+                        .tr
+                        .format("tui_command_copy_failed", &[("error", error.to_string())]),
+                };
+            }
             MouseAction::RemoveRule => self.remove_selected_rule(),
             MouseAction::Confirm => self.confirm_pending(),
             MouseAction::Cancel => {
@@ -668,9 +701,9 @@ impl App {
         let area = frame.area();
         frame.render_widget(Block::new().style(Style::default().bg(BASE).fg(TEXT)), area);
         let sections = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(TAB_HEIGHT),
             Constraint::Min(10),
-            Constraint::Length(2),
+            Constraint::Length(FOOTER_HEIGHT),
         ])
         .split(area);
         self.regions = UiRegions::new(
@@ -738,10 +771,10 @@ impl App {
         let list = List::new(items)
             .block(
                 Block::bordered()
-                    .title(self.tr.format(
+                    .title(panel_title(&self.tr.format(
                         "tui_resources_title",
                         &[("count", visible.len().to_string())],
-                    ))
+                    )))
                     .border_style(Style::default().fg(BORDER))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
@@ -763,26 +796,53 @@ impl App {
         let detail = self
             .selected_group()
             .map(|group| group_detail(group, self.tr, columns[1].width.saturating_sub(4) as usize))
-            .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_tab")));
-        let detail = Paragraph::new(detail)
+            .unwrap_or_else(|| DetailContent {
+                text: Text::from(self.tr.text("tui_empty_tab")),
+                commands: Vec::new(),
+            });
+        let content_height = columns[1].height.saturating_sub(2);
+        let copy_x = columns[1]
+            .x
+            .saturating_add(columns[1].width.saturating_sub(3));
+        self.regions.command_copies = detail
+            .commands
+            .iter()
+            .filter(|(row, _)| *row < content_height)
+            .map(|(row, command)| {
+                (
+                    Rect::new(
+                        copy_x,
+                        columns[1].y.saturating_add(row.saturating_add(1)),
+                        1,
+                        1,
+                    ),
+                    command.clone(),
+                )
+            })
+            .collect();
+        let detail = Paragraph::new(detail.text)
             .style(Style::default().fg(TEXT).bg(SURFACE))
             .block(
                 Block::bordered()
-                    .title(self.tr.text("tui_detail_title"))
+                    .title(panel_title(self.tr.text("tui_detail_title")))
                     .border_style(Style::default().fg(PURPLE))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
-            )
-            .wrap(Wrap { trim: false });
+            );
         frame.render_widget(detail, columns[1]);
     }
 
     fn draw_settings(&mut self, frame: &mut ratatui::Frame) {
+        frame.render_widget(
+            Block::new().style(Style::default().add_modifier(Modifier::DIM)),
+            frame.area(),
+        );
         frame.render_widget(Clear, self.regions.settings_popup);
         frame.render_widget(
             Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title(self.tr.text("tui_settings_title"))
+                .title_alignment(Alignment::Center)
                 .border_style(Style::default().fg(PURPLE))
                 .style(Style::default().fg(TEXT).bg(PANEL)),
             self.regions.settings_popup,
@@ -798,10 +858,10 @@ impl App {
         let list = List::new(items)
             .block(
                 Block::bordered()
-                    .title(self.tr.format(
+                    .title(panel_title(&self.tr.format(
                         "tui_rules_title",
                         &[("count", self.config.display.hide.len().to_string())],
-                    ))
+                    )))
                     .border_style(Style::default().fg(BORDER))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
@@ -833,7 +893,7 @@ impl App {
                 .style(Style::default().fg(TEXT).bg(SURFACE))
                 .block(
                     Block::bordered()
-                        .title(self.tr.text("tui_settings_detail_title"))
+                        .title(panel_title(self.tr.text("tui_settings_detail_title")))
                         .border_style(Style::default().fg(PURPLE))
                         .style(Style::default().fg(TEXT).bg(SURFACE))
                         .padding(Padding::horizontal(1)),
@@ -841,37 +901,29 @@ impl App {
                 .wrap(Wrap { trim: false }),
             self.regions.settings_detail_panel,
         );
-        frame.render_widget(
-            Paragraph::new(self.tr.text("tui_settings_remove_button"))
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Black).bg(DANGER).bold()),
+        render_button(
+            frame,
             self.regions.settings_remove,
+            self.tr.text("tui_settings_remove_button"),
+            DANGER,
         );
-        frame.render_widget(
-            Paragraph::new(self.tr.text("tui_settings_close_button"))
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Black).bg(MUTED).bold()),
+        render_button(
+            frame,
             self.regions.settings_close,
+            self.tr.text("tui_settings_close_button"),
+            MUTED,
         );
     }
 
     fn draw_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let action_row = Rect::new(area.x, area.y, area.width, 1);
+        let action_row = Rect::new(area.x, area.y, area.width, FOOTER_ACTION_HEIGHT);
         let actions = footer_actions(self.tab);
         let action_areas = footer_action_areas(action_row, actions.len());
+        let compact = action_areas.first().is_some_and(|area| area.width < 15);
         for ((area, action), _) in action_areas.iter().zip(&actions).zip(0..) {
-            let (label, key_label, danger) = action_label(*action, self.tab, self.tr);
+            let (label, key_label, danger) = action_label(*action, self.tab, self.tr, compact);
             let color = action_color(*action, danger);
-            let button = Paragraph::new(format!("{key_label}  {label}"))
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(BASE).bg(color).bold());
-            frame.render_widget(button, *area);
-        }
-        if let Some(hint_area) = footer_hint_area(action_row, actions.len()) {
-            frame.render_widget(
-                Paragraph::new(self.tr.text("tui_mouse_hint")).style(Style::default().fg(MUTED)),
-                hint_area,
-            );
+            render_button(frame, *area, &format!("{key_label}  {label}"), color);
         }
         let status = Line::from(Span::styled(
             format!("  {}", self.status),
@@ -881,7 +933,12 @@ impl App {
                 WARNING
             }),
         ));
-        let status_area = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
+        let status_area = Rect::new(
+            area.x,
+            area.y.saturating_add(FOOTER_ACTION_HEIGHT),
+            area.width,
+            1,
+        );
         frame.render_widget(Paragraph::new(status), status_area);
     }
 
@@ -1009,9 +1066,9 @@ impl App {
 impl UiRegions {
     fn new(area: Rect, tab: TabTarget, hide_field_count: usize) -> Self {
         let [tabs_area, content_area, footer_area] = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(TAB_HEIGHT),
             Constraint::Min(10),
-            Constraint::Length(2),
+            Constraint::Length(FOOTER_HEIGHT),
         ])
         .areas(area);
         let [list_column, _] = content_columns(content_area);
@@ -1038,7 +1095,12 @@ impl UiRegions {
         .enumerate()
         .map(|(index, tab)| (tab_areas[index], tab))
         .collect();
-        let action_row = Rect::new(footer_area.x, footer_area.y, footer_area.width, 1);
+        let action_row = Rect::new(
+            footer_area.x,
+            footer_area.y,
+            footer_area.width,
+            FOOTER_ACTION_HEIGHT,
+        );
         let actions = footer_actions(tab);
         let footer_areas = footer_action_areas(action_row, actions.len());
         let footer_actions = actions
@@ -1079,7 +1141,7 @@ impl UiRegions {
             settings_popup.height.saturating_sub(4),
         );
         let [settings_content, settings_buttons] =
-            Layout::vertical([Constraint::Min(6), Constraint::Length(2)]).areas(settings_inner);
+            Layout::vertical([Constraint::Min(6), Constraint::Length(3)]).areas(settings_inner);
         let [settings_list_panel, _, settings_detail_panel] = Layout::horizontal([
             Constraint::Percentage(43),
             Constraint::Length(1),
@@ -1114,6 +1176,7 @@ impl UiRegions {
             settings_popup,
             settings_remove,
             settings_close,
+            command_copies: Vec::new(),
         }
     }
 
@@ -1179,6 +1242,14 @@ impl UiRegions {
                 + usize::from(mouse.row.saturating_sub(self.list.y) / GROUP_ITEM_HEIGHT);
             return (item < visible_len).then_some(MouseAction::Select(item));
         }
+        if let Some((index, _)) = self
+            .command_copies
+            .iter()
+            .enumerate()
+            .find(|(_, (area, _))| rect_contains(*area, mouse.column, mouse.row))
+        {
+            return Some(MouseAction::CopyCommand(index));
+        }
         self.footer_actions
             .iter()
             .find(|(area, _)| rect_contains(*area, mouse.column, mouse.row))
@@ -1192,6 +1263,8 @@ fn footer_actions(_tab: TabTarget) -> Vec<MouseAction> {
         MouseAction::Stop,
         MouseAction::OpenSettings,
         MouseAction::SelectText,
+        MouseAction::Refresh,
+        MouseAction::Quit,
     ]
 }
 
@@ -1214,16 +1287,6 @@ fn footer_action_areas(area: Rect, count: usize) -> Vec<Rect> {
         .collect()
 }
 
-fn footer_hint_area(area: Rect, count: usize) -> Option<Rect> {
-    let gaps = count.saturating_sub(1) as u16;
-    let used = (count as u16)
-        .saturating_mul(footer_button_width(area, count))
-        .saturating_add(gaps)
-        .min(area.width);
-    let remaining = area.width.saturating_sub(used);
-    (remaining >= 16).then(|| Rect::new(area.x.saturating_add(used), area.y, remaining, 1))
-}
-
 fn footer_button_width(area: Rect, count: usize) -> u16 {
     if count == 0 {
         return 0;
@@ -1231,7 +1294,7 @@ fn footer_button_width(area: Rect, count: usize) -> u16 {
     let gaps = count.saturating_sub(1) as u16;
     let available = area.width.saturating_sub(gaps);
     let full_width = (count as u16).saturating_mul(20).saturating_add(gaps);
-    if area.width >= full_width.saturating_add(16) {
+    if area.width >= full_width {
         20
     } else {
         (available / count as u16).min(20)
@@ -1243,6 +1306,8 @@ fn action_color(action: MouseAction, danger: bool) -> Color {
         DANGER
     } else if action == MouseAction::OpenSettings {
         PURPLE
+    } else if action == MouseAction::Quit {
+        MUTED
     } else {
         CYAN
     }
@@ -1252,15 +1317,49 @@ fn action_label(
     action: MouseAction,
     tab: TabTarget,
     tr: Translator,
+    compact: bool,
 ) -> (&'static str, &'static str, bool) {
     match action {
         MouseAction::Hide => (tr.text("tui_action_hide"), "h", false),
         MouseAction::RemoveRule => (tr.text("tui_action_remove"), "u", true),
-        MouseAction::Stop => (tr.text(stop_action_label_key(tab)), "s", true),
+        MouseAction::Stop => (tr.text(stop_action_label_key(tab, compact)), "s", true),
         MouseAction::OpenSettings => (tr.text("tui_action_settings"), ",", false),
-        MouseAction::SelectText => (tr.text("tui_action_select_text"), "c", false),
+        MouseAction::SelectText => (
+            tr.text(if compact {
+                "tui_action_select_text_short"
+            } else {
+                "tui_action_select_text"
+            }),
+            "c",
+            false,
+        ),
+        MouseAction::Refresh => (tr.text("tui_action_refresh"), "r", false),
+        MouseAction::Quit => (tr.text("tui_action_quit"), "q", false),
         _ => ("", "", false),
     }
+}
+
+fn render_button(frame: &mut ratatui::Frame, area: Rect, label: &str, background: Color) {
+    frame.render_widget(
+        Block::new().style(Style::default().fg(BASE).bg(background).bold()),
+        area,
+    );
+    let label_row = Rect::new(
+        area.x,
+        area.y.saturating_add(area.height.saturating_sub(1) / 2),
+        area.width,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(label)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(BASE).bg(background).bold()),
+        label_row,
+    );
+}
+
+fn panel_title(title: &str) -> Line<'static> {
+    Line::from(format!("  {}  ", title.trim()))
 }
 
 fn confirmation_button_areas(popup: Rect) -> [Rect; 2] {
@@ -1410,7 +1509,9 @@ fn rule_list_item(index: usize, rule: &HideRule, tr: Translator) -> ListItem<'st
             parts.into_iter().skip(1).collect::<Vec<_>>().join(" · "),
             Style::default().fg(MUTED),
         )),
+        Line::from(""),
     ])
+    .style(Style::default().fg(TEXT).bg(SURFACE))
 }
 
 fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) -> Text<'static> {
@@ -1540,8 +1641,9 @@ fn group_list_item(group: &ResourceGroup, tr: Translator) -> ListItem<'static> {
     .style(Style::default().fg(TEXT).bg(SURFACE))
 }
 
-fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> Text<'static> {
+fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> DetailContent {
     let mut lines = Vec::new();
+    let mut commands = Vec::new();
     lines.push(route_line(group, tr, width));
     lines.push(Line::from(""));
     for (index, service) in group.services.iter().enumerate() {
@@ -1598,11 +1700,31 @@ fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> Text<'st
         if let Some(unit) = &service.manager_unit {
             lines.push(detail_line(tr.text("tui_field_unit"), unit.clone(), width));
         }
-        lines.push(detail_line(
-            tr.text("tui_field_command"),
-            service.command.clone(),
-            width,
-        ));
+        let wrapped_command = wrap_command(&service.command, width.saturating_sub(11).max(1));
+        let last_command_line = wrapped_command.len().saturating_sub(1);
+        for (command_line_index, command_line) in wrapped_command.into_iter().enumerate() {
+            let label = if command_line_index == 0 {
+                padded_label(tr.text("tui_field_command"), 9)
+            } else {
+                " ".repeat(9)
+            };
+            let padding =
+                width.saturating_sub(9 + UnicodeWidthStr::width(command_line.as_str()) + 1);
+            let row = lines.len() as u16;
+            let is_last = command_line_index == last_command_line;
+            lines.push(Line::from(vec![
+                Span::styled(label, Style::default().fg(MUTED)),
+                Span::raw(command_line),
+                Span::raw(" ".repeat(padding)),
+                Span::styled(
+                    if is_last { "⧉" } else { " " },
+                    Style::default().fg(CYAN).bold(),
+                ),
+            ]));
+            if is_last {
+                commands.push((row, service.command.clone()));
+            }
+        }
         if !service.can_terminate {
             lines.push(Line::from(Span::styled(
                 tr.text("tui_protected"),
@@ -1616,15 +1738,25 @@ fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> Text<'st
             )));
         }
     }
-    Text::from(lines)
+    DetailContent {
+        text: Text::from(lines),
+        commands,
+    }
 }
 
 fn detail_line(label: &str, value: String, width: usize) -> Line<'static> {
     let value = truncate_text(&value, width.saturating_sub(9));
     Line::from(vec![
-        Span::styled(format!("{label:<9}"), Style::default().fg(MUTED)),
+        Span::styled(padded_label(label, 9), Style::default().fg(MUTED)),
         Span::raw(value),
     ])
+}
+
+fn padded_label(value: &str, width: usize) -> String {
+    format!(
+        "{value}{}",
+        " ".repeat(width.saturating_sub(UnicodeWidthStr::width(value)))
+    )
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -1640,6 +1772,38 @@ fn truncate_text(value: &str, max_chars: usize) -> String {
     let mut truncated = value.chars().take(max_chars - 1).collect::<String>();
     truncated.push('…');
     truncated
+}
+
+fn wrap_command(value: &str, max_chars: usize) -> Vec<String> {
+    if value.is_empty() || max_chars == 0 {
+        return vec![value.to_owned()];
+    }
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width: usize = 0;
+    for character in value.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if !line.is_empty() && line_width.saturating_add(character_width) > max_chars {
+            lines.push(std::mem::take(&mut line));
+            line_width = 0;
+        }
+        line.push(character);
+        line_width = line_width.saturating_add(character_width);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn osc52_sequence(value: &str) -> String {
+    format!("\u{1b}]52;c;{}\u{7}", BASE64.encode(value.as_bytes()))
+}
+
+fn copy_to_terminal_clipboard(value: &str) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    stdout.write_all(osc52_sequence(value).as_bytes())?;
+    stdout.flush()
 }
 
 fn route_line(group: &ResourceGroup, tr: Translator, width: usize) -> Line<'static> {
@@ -1806,12 +1970,16 @@ fn stop_label_key(tab: TabTarget) -> &'static str {
     }
 }
 
-fn stop_action_label_key(tab: TabTarget) -> &'static str {
-    match tab {
-        TabTarget::All => "tui_action_stop_group",
-        TabTarget::Dev => "tui_action_stop_dev",
-        TabTarget::Tunnels => "tui_action_stop_tunnel",
-        TabTarget::System => "tui_action_stop_service",
+fn stop_action_label_key(tab: TabTarget, compact: bool) -> &'static str {
+    match (tab, compact) {
+        (TabTarget::All, true) => "tui_action_stop_group_short",
+        (TabTarget::Dev, true) => "tui_action_stop_dev_short",
+        (TabTarget::Tunnels, true) => "tui_action_stop_tunnel_short",
+        (TabTarget::System, true) => "tui_action_stop_service_short",
+        (TabTarget::All, false) => "tui_action_stop_group",
+        (TabTarget::Dev, false) => "tui_action_stop_dev",
+        (TabTarget::Tunnels, false) => "tui_action_stop_tunnel",
+        (TabTarget::System, false) => "tui_action_stop_service",
     }
 }
 
@@ -1836,9 +2004,9 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::{
-        MouseAction, NavigationAction, UiRegions, footer_actions, footer_hint_area, is_quit_key,
-        navigation_action, next_tab_target, previous_tab_target, stop_target_for_tab,
-        text_selection_transition, truncate_text,
+        MouseAction, NavigationAction, UiRegions, footer_actions, is_quit_key, navigation_action,
+        next_tab_target, osc52_sequence, padded_label, previous_tab_target, stop_target_for_tab,
+        text_selection_transition, truncate_text, wrap_command,
     };
     use port_deck_cli::{StopTarget, TabTarget};
 
@@ -1907,6 +2075,8 @@ mod tests {
                 MouseAction::Stop,
                 MouseAction::OpenSettings,
                 MouseAction::SelectText,
+                MouseAction::Refresh,
+                MouseAction::Quit,
             ]
         );
     }
@@ -1928,12 +2098,24 @@ mod tests {
             Some(MouseAction::Select(3))
         );
         assert_eq!(
+            regions.action_at(mouse_down(30, 26), 0, 8, false, false, false),
+            Some(MouseAction::Stop)
+        );
+        assert_eq!(
             regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
             Some(MouseAction::Stop)
         );
         assert_eq!(
-            regions.action_at(mouse_down(75, 28), 0, 8, false, false, false),
+            regions.action_at(mouse_down(55, 28), 0, 8, false, false, false),
             Some(MouseAction::SelectText)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(75, 28), 0, 8, false, false, false),
+            Some(MouseAction::Refresh)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(90, 28), 0, 8, false, false, false),
+            Some(MouseAction::Quit)
         );
     }
 
@@ -1948,11 +2130,37 @@ mod tests {
     }
 
     #[test]
-    fn footer_hint_only_appears_when_the_full_hint_has_room() {
-        assert_eq!(footer_hint_area(Rect::new(0, 0, 80, 1), 4), None);
+    fn command_wrapping_preserves_the_complete_command() {
         assert_eq!(
-            footer_hint_area(Rect::new(0, 0, 100, 1), 4),
-            Some(Rect::new(83, 0, 17, 1))
+            wrap_command("cloudflared tunnel --url localhost:5000", 12),
+            vec!["cloudflared ", "tunnel --url", " localhost:5", "000"]
+        );
+        assert_eq!(wrap_command("echo 你好", 6), vec!["echo ", "你好"]);
+        assert_eq!(wrap_command("", 12), vec![""]);
+    }
+
+    #[test]
+    fn detail_labels_use_terminal_cell_width_for_cjk_text() {
+        assert_eq!(padded_label("命令", 9), "命令     ");
+        assert_eq!(padded_label("command", 9), "command  ");
+    }
+
+    #[test]
+    fn clipboard_sequence_uses_the_terminal_osc52_protocol() {
+        assert_eq!(
+            osc52_sequence("npm run dev"),
+            "\u{1b}]52;c;bnBtIHJ1biBkZXY=\u{7}"
+        );
+    }
+
+    #[test]
+    fn command_copy_icon_is_clickable() {
+        let mut regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
+        regions.command_copies = vec![(Rect::new(80, 8, 1, 1), "npm run dev".into())];
+
+        assert_eq!(
+            regions.action_at(mouse_down(80, 8), 0, 0, false, false, false),
+            Some(MouseAction::CopyCommand(0))
         );
     }
 
@@ -2024,7 +2232,15 @@ mod tests {
 
         assert_eq!(
             regions.action_at(mouse_down(15, 10), 0, 3, false, false, true),
+            Some(MouseAction::SelectSetting(0))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(15, 11), 0, 3, false, false, true),
             Some(MouseAction::SelectSetting(1))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(30, 20), 0, 3, false, false, true),
+            Some(MouseAction::RemoveRule)
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 21), 0, 3, false, false, true),

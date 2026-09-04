@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
   <title id="title">Strayd terminal interface</title>
-  <desc id="desc">Strayd groups a Vite server on port 5000 with its Cloudflare tunnel, provides four explicit resource tabs, one contextual stop action, Settings, and text selection.</desc>
+  <desc id="desc">Strayd groups a Vite server on port 5000 with its Cloudflare tunnel, wraps full commands with a copy control, and provides six consistent footer actions.</desc>
   <rect width="1200" height="720" rx="24" fill="#070b12"/>
   <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
   <text x="46" y="36" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">STRAYD / TERMINAL CONTROL</text>
@@ -58,11 +58,13 @@
   <text x="596" y="460" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">localhost:5000</text>
   <text x="494" y="491" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">command</text>
   <text x="596" y="491" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">cloudflared tunnel --url http://localhost:5000</text>
+  <text x="1136" y="491" text-anchor="end" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">⧉</text>
 
-  <rect x="24" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="42" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h     HIDE</text>
-  <rect x="214" y="640" width="180" height="34" rx="5" fill="#ff657c"/><text x="232" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">s     STOP GROUP</text>
-  <rect x="404" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="422" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">,     SETTINGS</text>
-  <rect x="594" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="612" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">c     SELECT TEXT</text>
-  <text x="814" y="663" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">r refresh · q quit · arrows navigate</text>
+  <rect x="24" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="114" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h   HIDE</text>
+  <rect x="214" y="640" width="180" height="34" rx="5" fill="#ff657c"/><text x="304" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">s   STOP GROUP</text>
+  <rect x="404" y="640" width="180" height="34" rx="5" fill="#ab72ff"/><text x="494" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">,   SETTINGS</text>
+  <rect x="594" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="684" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">c   SELECT TEXT</text>
+  <rect x="784" y="640" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="874" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">r   REFRESH</text>
+  <rect x="974" y="640" width="180" height="34" rx="5" fill="#758097"/><text x="1064" y="662" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">q   QUIT</text>
   <text x="28" y="702" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">4 groups / 5 resources · scan ready</text>
 </svg>

@@ -8,6 +8,7 @@ name = "strayd"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.23.1"
 clap = { version = "4.6", features = ["derive"] }
 crossterm = "0.29"
 directories = "6.0.0"
@@ -20,3 +21,4 @@ serde_json = "1"
 sys-locale = "0.3"
 thiserror = "2"
 toml = "1.1.5"
+unicode-width = "0.2.2"

@@ -38,6 +38,10 @@
   <rect x="252" y="486" width="220" height="36" rx="5" fill="#758097"/>
   <text x="362" y="510" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">ESC / 取消</text>
 
-  <rect x="24" y="586" width="126" height="34" rx="5" fill="#3dd6d0"/><text x="42" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h     隐藏</text>
-  <text x="174" y="609" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">配置会立即写入 config.toml，并在保存后刷新资源列表</text>
+  <rect x="24" y="586" width="180" height="34" rx="5" fill="#3dd6d0" opacity="0.55"/><text x="114" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h   隐藏</text>
+  <rect x="214" y="586" width="180" height="34" rx="5" fill="#ff657c" opacity="0.55"/><text x="304" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">s   停止整组</text>
+  <rect x="404" y="586" width="180" height="34" rx="5" fill="#ab72ff" opacity="0.55"/><text x="494" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">,   设置</text>
+  <rect x="594" y="586" width="180" height="34" rx="5" fill="#3dd6d0" opacity="0.55"/><text x="684" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">c   选择文字</text>
+  <rect x="784" y="586" width="180" height="34" rx="5" fill="#3dd6d0" opacity="0.55"/><text x="874" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">r   刷新</text>
+  <rect x="974" y="586" width="180" height="34" rx="5" fill="#758097" opacity="0.55"/><text x="1064" y="608" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">q   退出</text>
 </svg>
