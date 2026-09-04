@@ -29,10 +29,16 @@ use ratatui::widgets::{
 const CYAN: Color = Color::Rgb(61, 214, 208);
 const PURPLE: Color = Color::Rgb(171, 114, 255);
 const MUTED: Color = Color::Rgb(117, 128, 151);
+const BASE: Color = Color::Rgb(7, 11, 18);
+const SURFACE: Color = Color::Rgb(11, 16, 25);
 const PANEL: Color = Color::Rgb(15, 20, 31);
 const SELECTED: Color = Color::Rgb(25, 40, 58);
+const BORDER: Color = Color::Rgb(53, 64, 80);
+const TEXT: Color = Color::Rgb(247, 249, 252);
 const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
+const GROUP_ITEM_HEIGHT: u16 = 3;
+const RULE_ITEM_HEIGHT: u16 = 2;
 
 pub fn run(
     args: TuiArgs,
@@ -660,6 +666,7 @@ impl App {
 
     fn draw(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
+        frame.render_widget(Block::new().style(Style::default().bg(BASE).fg(TEXT)), area);
         let sections = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(10),
@@ -692,7 +699,9 @@ impl App {
         frame.render_widget(
             Block::bordered()
                 .border_type(BorderType::Rounded)
-                .title(self.tr.text("tui_title")),
+                .title(self.tr.text("tui_title"))
+                .border_style(Style::default().fg(BORDER))
+                .style(Style::default().fg(TEXT).bg(PANEL)),
             area,
         );
         let labels = [
@@ -712,7 +721,7 @@ impl App {
                             .bg(CYAN)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(MUTED)
+                        Style::default().fg(MUTED).bg(PANEL)
                     }),
                 *tab_area,
             );
@@ -720,8 +729,7 @@ impl App {
     }
 
     fn draw_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
-            .split(area);
+        let columns = content_columns(area);
         let visible = self.visible_group_indices();
         let items = visible
             .iter()
@@ -734,9 +742,11 @@ impl App {
                         "tui_resources_title",
                         &[("count", visible.len().to_string())],
                     ))
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(BORDER))
+                    .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
             )
+            .style(Style::default().fg(TEXT).bg(SURFACE))
             .highlight_symbol("▌ ")
             .highlight_style(
                 Style::default()
@@ -752,13 +762,15 @@ impl App {
 
         let detail = self
             .selected_group()
-            .map(|group| group_detail(group, self.tr))
+            .map(|group| group_detail(group, self.tr, columns[1].width.saturating_sub(4) as usize))
             .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_tab")));
         let detail = Paragraph::new(detail)
+            .style(Style::default().fg(TEXT).bg(SURFACE))
             .block(
                 Block::bordered()
                     .title(self.tr.text("tui_detail_title"))
                     .border_style(Style::default().fg(PURPLE))
+                    .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false });
@@ -771,7 +783,8 @@ impl App {
             Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title(self.tr.text("tui_settings_title"))
-                .border_style(Style::default().fg(PURPLE)),
+                .border_style(Style::default().fg(PURPLE))
+                .style(Style::default().fg(TEXT).bg(PANEL)),
             self.regions.settings_popup,
         );
         let items = self
@@ -789,9 +802,11 @@ impl App {
                         "tui_rules_title",
                         &[("count", self.config.display.hide.len().to_string())],
                     ))
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(BORDER))
+                    .style(Style::default().fg(TEXT).bg(SURFACE))
                     .padding(Padding::horizontal(1)),
             )
+            .style(Style::default().fg(TEXT).bg(SURFACE))
             .highlight_symbol("▌ ")
             .highlight_style(
                 Style::default()
@@ -815,10 +830,12 @@ impl App {
             .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_rules")));
         frame.render_widget(
             Paragraph::new(detail)
+                .style(Style::default().fg(TEXT).bg(SURFACE))
                 .block(
                     Block::bordered()
                         .title(self.tr.text("tui_settings_detail_title"))
                         .border_style(Style::default().fg(PURPLE))
+                        .style(Style::default().fg(TEXT).bg(SURFACE))
                         .padding(Padding::horizontal(1)),
                 )
                 .wrap(Wrap { trim: false }),
@@ -844,14 +861,10 @@ impl App {
         let action_areas = footer_action_areas(action_row, actions.len());
         for ((area, action), _) in action_areas.iter().zip(&actions).zip(0..) {
             let (label, key_label, danger) = action_label(*action, self.tab, self.tr);
-            let color = if danger { DANGER } else { CYAN };
-            let button = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!(" {key_label} "),
-                    Style::default().fg(Color::Black).bg(color).bold(),
-                ),
-                Span::styled(format!("   {label}"), Style::default().fg(color)),
-            ]));
+            let color = action_color(*action, danger);
+            let button = Paragraph::new(format!("{key_label}  {label}"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(BASE).bg(color).bold());
             frame.render_widget(button, *area);
         }
         if let Some(hint_area) = footer_hint_area(action_row, actions.len()) {
@@ -1001,9 +1014,7 @@ impl UiRegions {
             Constraint::Length(2),
         ])
         .areas(area);
-        let [list_column, _] =
-            Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
-                .areas(content_area);
+        let [list_column, _] = content_columns(content_area);
         let list = Rect::new(
             list_column.x.saturating_add(2),
             list_column.y.saturating_add(1),
@@ -1069,9 +1080,12 @@ impl UiRegions {
         );
         let [settings_content, settings_buttons] =
             Layout::vertical([Constraint::Min(6), Constraint::Length(2)]).areas(settings_inner);
-        let [settings_list_panel, settings_detail_panel] =
-            Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
-                .areas(settings_content);
+        let [settings_list_panel, _, settings_detail_panel] = Layout::horizontal([
+            Constraint::Percentage(43),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(settings_content);
         let settings_list = Rect::new(
             settings_list_panel.x.saturating_add(2),
             settings_list_panel.y.saturating_add(1),
@@ -1140,8 +1154,10 @@ impl UiRegions {
         }
         if settings_open {
             if rect_contains(self.settings_list, mouse.column, mouse.row) {
-                let item =
-                    list_offset + usize::from(mouse.row.saturating_sub(self.settings_list.y) / 2);
+                let item = list_offset
+                    + usize::from(
+                        mouse.row.saturating_sub(self.settings_list.y) / RULE_ITEM_HEIGHT,
+                    );
                 return (item < visible_len).then_some(MouseAction::SelectSetting(item));
             }
             return rect_contains(self.settings_remove, mouse.column, mouse.row)
@@ -1159,7 +1175,8 @@ impl UiRegions {
             return Some(MouseAction::SetTab(*tab));
         }
         if rect_contains(self.list, mouse.column, mouse.row) {
-            let item = list_offset + usize::from(mouse.row.saturating_sub(self.list.y) / 2);
+            let item = list_offset
+                + usize::from(mouse.row.saturating_sub(self.list.y) / GROUP_ITEM_HEIGHT);
             return (item < visible_len).then_some(MouseAction::Select(item));
         }
         self.footer_actions
@@ -1180,41 +1197,54 @@ fn footer_actions(_tab: TabTarget) -> Vec<MouseAction> {
 
 fn footer_action_areas(area: Rect, count: usize) -> Vec<Rect> {
     let width = footer_button_width(area, count);
-    let constraints = (0..count)
-        .map(|_| Constraint::Length(width))
-        .chain(std::iter::once(Constraint::Min(0)))
-        .collect::<Vec<_>>();
+    let mut constraints = Vec::with_capacity(count.saturating_mul(2));
+    for index in 0..count {
+        constraints.push(Constraint::Length(width));
+        if index + 1 < count {
+            constraints.push(Constraint::Length(1));
+        }
+    }
+    constraints.push(Constraint::Min(0));
     Layout::horizontal(constraints)
         .split(area)
         .iter()
+        .step_by(2)
         .take(count)
         .copied()
         .collect()
 }
 
 fn footer_hint_area(area: Rect, count: usize) -> Option<Rect> {
+    let gaps = count.saturating_sub(1) as u16;
     let used = (count as u16)
         .saturating_mul(footer_button_width(area, count))
+        .saturating_add(gaps)
         .min(area.width);
-    (used < area.width).then(|| {
-        Rect::new(
-            area.x.saturating_add(used),
-            area.y,
-            area.width.saturating_sub(used),
-            1,
-        )
-    })
+    let remaining = area.width.saturating_sub(used);
+    (remaining >= 16).then(|| Rect::new(area.x.saturating_add(used), area.y, remaining, 1))
 }
 
 fn footer_button_width(area: Rect, count: usize) -> u16 {
     if count == 0 {
         return 0;
     }
-    let full_width = (count as u16).saturating_mul(20);
+    let gaps = count.saturating_sub(1) as u16;
+    let available = area.width.saturating_sub(gaps);
+    let full_width = (count as u16).saturating_mul(20).saturating_add(gaps);
     if area.width >= full_width.saturating_add(16) {
         20
     } else {
-        (area.width / count as u16).min(20)
+        (available / count as u16).min(20)
+    }
+}
+
+fn action_color(action: MouseAction, danger: bool) -> Color {
+    if danger {
+        DANGER
+    } else if action == MouseAction::OpenSettings {
+        PURPLE
+    } else {
+        CYAN
     }
 }
 
@@ -1502,15 +1532,17 @@ fn group_list_item(group: &ResourceGroup, tr: Translator) -> ListItem<'static> {
         Line::from(vec![
             Span::styled(port, Style::default().fg(CYAN).bold()),
             Span::raw("  "),
-            Span::styled(name, Style::default().fg(Color::White)),
+            Span::styled(name, Style::default().fg(TEXT)),
         ]),
         Line::from(Span::styled(suffix, Style::default().fg(MUTED))),
+        Line::from(""),
     ])
+    .style(Style::default().fg(TEXT).bg(SURFACE))
 }
 
-fn group_detail(group: &ResourceGroup, tr: Translator) -> Text<'static> {
+fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> Text<'static> {
     let mut lines = Vec::new();
-    lines.push(route_line(group, tr));
+    lines.push(route_line(group, tr, width));
     lines.push(Line::from(""));
     for (index, service) in group.services.iter().enumerate() {
         let role = match service.resource_kind {
@@ -1539,6 +1571,7 @@ fn group_detail(group: &ResourceGroup, tr: Translator) -> Text<'static> {
         lines.push(detail_line(
             tr.text("tui_field_scope"),
             scope_label(service),
+            width,
         ));
         if !service.ports.is_empty() {
             lines.push(detail_line(
@@ -1549,27 +1582,27 @@ fn group_detail(group: &ResourceGroup, tr: Translator) -> Text<'static> {
                     .map(|port| format!(":{port}"))
                     .collect::<Vec<_>>()
                     .join(", "),
+                width,
             ));
         }
         if let Some(target) = &service.tunnel_target {
             lines.push(detail_line(
                 tr.text("tui_field_proxy"),
                 format!("{}:{}", target.host, target.port),
+                width,
             ));
         }
         if let Some(cwd) = &service.cwd {
-            lines.push(detail_line(tr.text("tui_field_cwd"), cwd.clone()));
+            lines.push(detail_line(tr.text("tui_field_cwd"), cwd.clone(), width));
         }
         if let Some(unit) = &service.manager_unit {
-            lines.push(detail_line(tr.text("tui_field_unit"), unit.clone()));
+            lines.push(detail_line(tr.text("tui_field_unit"), unit.clone(), width));
         }
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:<9}", tr.text("tui_field_command")),
-                Style::default().fg(MUTED),
-            ),
-            Span::raw(service.command.clone()),
-        ]));
+        lines.push(detail_line(
+            tr.text("tui_field_command"),
+            service.command.clone(),
+            width,
+        ));
         if !service.can_terminate {
             lines.push(Line::from(Span::styled(
                 tr.text("tui_protected"),
@@ -1586,14 +1619,30 @@ fn group_detail(group: &ResourceGroup, tr: Translator) -> Text<'static> {
     Text::from(lines)
 }
 
-fn detail_line(label: &str, value: String) -> Line<'static> {
+fn detail_line(label: &str, value: String, width: usize) -> Line<'static> {
+    let value = truncate_text(&value, width.saturating_sub(9));
     Line::from(vec![
         Span::styled(format!("{label:<9}"), Style::default().fg(MUTED)),
         Span::raw(value),
     ])
 }
 
-fn route_line(group: &ResourceGroup, tr: Translator) -> Line<'static> {
+fn truncate_text(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    if max_chars == 1 {
+        return "…".into();
+    }
+    let mut truncated = value.chars().take(max_chars - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn route_line(group: &ResourceGroup, tr: Translator, width: usize) -> Line<'static> {
     let tunnel = group
         .services
         .iter()
@@ -1603,38 +1652,47 @@ fn route_line(group: &ResourceGroup, tr: Translator) -> Line<'static> {
         .iter()
         .find(|service| service.resource_kind != ResourceKind::Tunnel);
     match (tunnel, source, group.primary_port) {
-        (Some(tunnel), Some(source), Some(port)) => Line::from(vec![
-            Span::styled(
-                tr.text("tui_route_public"),
-                Style::default().fg(PURPLE).bold(),
-            ),
-            Span::styled("  ──▶  ", Style::default().fg(MUTED)),
-            Span::styled(runtime_slug(&tunnel.runtime), Style::default().fg(PURPLE)),
-            Span::styled("  ──▶  ", Style::default().fg(MUTED)),
-            Span::styled(
-                format!(
+        (Some(tunnel), Some(source), Some(port)) => {
+            let public = tr.text("tui_route_public");
+            let runtime = runtime_slug(&tunnel.runtime);
+            let fixed_width = public.chars().count() + runtime.chars().count() + 14;
+            let source = truncate_text(
+                &format!(
                     ":{port} {}",
                     source
                         .project_name
                         .as_deref()
                         .unwrap_or(&source.process_name)
                 ),
-                Style::default().fg(CYAN).bold(),
-            ),
-        ]),
+                width.saturating_sub(fixed_width),
+            );
+            Line::from(vec![
+                Span::styled(public, Style::default().fg(PURPLE).bold()),
+                Span::styled("  ──▶  ", Style::default().fg(MUTED)),
+                Span::styled(runtime, Style::default().fg(PURPLE)),
+                Span::styled("  ──▶  ", Style::default().fg(MUTED)),
+                Span::styled(source, Style::default().fg(CYAN).bold()),
+            ])
+        }
         (_, Some(source), Some(port)) => Line::from(Span::styled(
-            format!(
-                "{} :{port} / {}",
-                tr.text("tui_route_local"),
-                source
-                    .project_name
-                    .as_deref()
-                    .unwrap_or(&source.process_name)
+            truncate_text(
+                &format!(
+                    "{} :{port} / {}",
+                    tr.text("tui_route_local"),
+                    source
+                        .project_name
+                        .as_deref()
+                        .unwrap_or(&source.process_name)
+                ),
+                width,
             ),
             Style::default().fg(CYAN).bold(),
         )),
         (Some(tunnel), _, Some(port)) => Line::from(Span::styled(
-            format!("{} ──▶ localhost:{port}", runtime_slug(&tunnel.runtime)),
+            truncate_text(
+                &format!("{} ──▶ localhost:{port}", runtime_slug(&tunnel.runtime)),
+                width,
+            ),
             Style::default().fg(PURPLE).bold(),
         )),
         _ => Line::from(Span::styled(
@@ -1676,6 +1734,16 @@ fn scan_status(snapshot: &ScanSnapshot, hidden_count: usize, tr: Translator) -> 
         snapshot.warnings.len(),
         hidden_count,
     )
+}
+
+fn content_columns(area: Rect) -> [Rect; 2] {
+    let [list, _, detail] = Layout::horizontal([
+        Constraint::Percentage(43),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    [list, detail]
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -1768,8 +1836,9 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::{
-        MouseAction, NavigationAction, UiRegions, footer_actions, is_quit_key, navigation_action,
-        next_tab_target, previous_tab_target, stop_target_for_tab, text_selection_transition,
+        MouseAction, NavigationAction, UiRegions, footer_actions, footer_hint_area, is_quit_key,
+        navigation_action, next_tab_target, previous_tab_target, stop_target_for_tab,
+        text_selection_transition, truncate_text,
     };
     use port_deck_cli::{StopTarget, TabTarget};
 
@@ -1856,7 +1925,7 @@ mod tests {
         );
         assert_eq!(
             regions.action_at(mouse_down(8, 8), 2, 8, false, false, false),
-            Some(MouseAction::Select(4))
+            Some(MouseAction::Select(3))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
@@ -1865,6 +1934,25 @@ mod tests {
         assert_eq!(
             regions.action_at(mouse_down(75, 28), 0, 8, false, false, false),
             Some(MouseAction::SelectText)
+        );
+    }
+
+    #[test]
+    fn long_detail_values_are_ellipsized_to_the_available_width() {
+        assert_eq!(
+            truncate_text("cloudflared tunnel --url localhost:5000", 18),
+            "cloudflared tunne…"
+        );
+        assert_eq!(truncate_text("vite", 18), "vite");
+        assert_eq!(truncate_text("vite", 0), "");
+    }
+
+    #[test]
+    fn footer_hint_only_appears_when_the_full_hint_has_room() {
+        assert_eq!(footer_hint_area(Rect::new(0, 0, 80, 1), 4), None);
+        assert_eq!(
+            footer_hint_area(Rect::new(0, 0, 100, 1), 4),
+            Some(Rect::new(83, 0, 17, 1))
         );
     }
 
