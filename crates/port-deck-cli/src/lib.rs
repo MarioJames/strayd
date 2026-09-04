@@ -1,11 +1,11 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use port_deck_core::{ProcessOrigin, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess};
+use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "port-deck",
+    name = "strayd",
     version,
-    about = "Manage Windows and WSL development services and tunnels"
+    about = "Manage local development services and tunnels"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -116,13 +116,9 @@ pub struct Filters {
     #[arg(long)]
     pub project: Option<String>,
 
-    /// Match Windows or WSL resources
+    /// Match the host platform
     #[arg(long, value_enum)]
-    pub origin: Option<OriginFilter>,
-
-    /// Match a WSL distribution
-    #[arg(long = "distro", visible_alias = "distribution")]
-    pub distribution: Option<String>,
+    pub platform: Option<PlatformFilter>,
 
     /// Match a runtime such as next-js, vite, or cloudflared
     #[arg(long)]
@@ -130,9 +126,10 @@ pub struct Filters {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum OriginFilter {
+pub enum PlatformFilter {
     Windows,
-    Wsl,
+    Linux,
+    Macos,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -265,17 +262,13 @@ fn filters_match_service_except_id_and_port(filters: &Filters, service: &Service
                 .cwd
                 .as_deref()
                 .is_some_and(|value| value.to_ascii_lowercase().contains(&expected))
-    }) && filters.origin.is_none_or(|origin| {
+    }) && filters.platform.is_none_or(|platform| {
         matches!(
-            (origin, &service.origin),
-            (OriginFilter::Windows, ProcessOrigin::Windows)
-                | (OriginFilter::Wsl, ProcessOrigin::Wsl)
+            (platform, service.platform),
+            (PlatformFilter::Windows, HostPlatform::Windows)
+                | (PlatformFilter::Linux, HostPlatform::Linux)
+                | (PlatformFilter::Macos, HostPlatform::MacOs)
         )
-    }) && filters.distribution.as_ref().is_none_or(|expected| {
-        service
-            .distribution
-            .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case(expected))
     }) && filters
         .runtime
         .as_ref()

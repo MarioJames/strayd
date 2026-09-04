@@ -1,21 +1,21 @@
 use clap::Parser;
-use port_deck_cli::{Cli, Command, Filters, OriginFilter, PlanError, StopTarget, build_stop_plan};
+use port_deck_cli::{
+    Cli, Command, Filters, PlanError, PlatformFilter, StopTarget, build_stop_plan,
+};
 use port_deck_core::{
-    ProcessOrigin, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess, TunnelTarget,
+    HostPlatform, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess, TunnelTarget,
 };
 
 #[test]
-fn parses_tunnel_stop_with_wsl_filters_and_safety_flags() {
+fn parses_tunnel_stop_with_host_platform_filter_and_safety_flags() {
     let cli = Cli::try_parse_from([
-        "port-deck",
+        "strayd",
         "stop",
         "tunnel",
         "--port",
         "5000",
-        "--origin",
-        "wsl",
-        "--distro",
-        "Ubuntu",
+        "--platform",
+        "linux",
         "--all",
         "--yes",
     ])
@@ -26,8 +26,7 @@ fn parses_tunnel_stop_with_wsl_filters_and_safety_flags() {
     };
     assert_eq!(args.target, StopTarget::Tunnel);
     assert_eq!(args.filters.port, Some(5000));
-    assert_eq!(args.filters.origin, Some(OriginFilter::Wsl));
-    assert_eq!(args.filters.distribution.as_deref(), Some("Ubuntu"));
+    assert_eq!(args.filters.platform, Some(PlatformFilter::Linux));
     assert!(args.all);
     assert!(args.yes);
 }
@@ -143,9 +142,8 @@ fn service(
     port: u16,
 ) -> ServiceProcess {
     ServiceProcess {
-        id: format!("wsl:Ubuntu:{pid}:100"),
-        origin: ProcessOrigin::Wsl,
-        distribution: Some("Ubuntu".into()),
+        id: format!("linux:{pid}:100"),
+        platform: HostPlatform::Linux,
         pid,
         parent_pid: 1,
         ports: vec![port],

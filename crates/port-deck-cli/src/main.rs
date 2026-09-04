@@ -7,7 +7,7 @@ use clap::Parser;
 use port_deck_cli::{
     Cli, Command, ListArgs, StopArgs, TuiArgs, build_stop_plan, filter_groups, runtime_slug,
 };
-use port_deck_core::{ProcessOrigin, ResourceGroup, ResourceKind, ServiceProcess};
+use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
 use serde::Serialize;
 
@@ -153,9 +153,10 @@ fn group_label(group: &ResourceGroup) -> String {
 }
 
 fn describe_service(service: &ServiceProcess) -> String {
-    let origin = match service.origin {
-        ProcessOrigin::Windows => "Windows".into(),
-        ProcessOrigin::Wsl => format!("WSL/{}", service.distribution.as_deref().unwrap_or("?")),
+    let platform = match service.platform {
+        HostPlatform::Windows => "Windows",
+        HostPlatform::Linux => "Linux",
+        HostPlatform::MacOs => "macOS",
     };
     let target = service
         .tunnel_target
@@ -166,7 +167,7 @@ fn describe_service(service: &ServiceProcess) -> String {
         "{} pid={} {} {}{}",
         runtime_slug(&service.runtime),
         service.pid,
-        origin,
+        platform,
         service.id,
         target
     )

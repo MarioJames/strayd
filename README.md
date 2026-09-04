@@ -1,75 +1,49 @@
-# Port Deck
+# Strayd
 
-Port Deck 是一个用 Rust 编写的 Windows / WSL 开发资源管理工具，同时提供可通过 npm 安装的终端 TUI 与 Tauri 2 Windows 托盘界面。它用来发现并管理“启动后找不到在哪”的本地开发服务、临时公网隧道和 SSH 服务。
+Strayd 是一个通过 npm 分发的跨平台 Rust TUI/CLI，用来发现和管理本地开发服务、临时公网隧道与 SSH 服务。
 
-## npm CLI / TUI
+## 安装与使用
 
-临时包名为 `port-deck-cli`。在仓库中生成同时包含 Windows x64 与 WSL/Linux x64 原生程序的 npm tarball：
-
-```bash
-bun run pack:cli
-npm install --global ./dist/npm/port-deck-cli-0.1.0.tgz
-port-deck
-```
-
-无子命令时进入 TUI，也可显式运行 `port-deck tui --tab tunnels --refresh 5`。TUI 使用 `Tab` 或 `1-4` 切页，`j/k` 选择，`d` 关闭开发服务，`t` 关闭隧道，`x` 关闭整个关联组，`r` 刷新，`q` 退出。
-
-脚本化命令：
+正式包发布后可直接安装，用户不需要 Rust：
 
 ```bash
-port-deck list --kind tunnel
-port-deck list --port 5000 --json
-port-deck stop tunnel --port 5000 --dry-run
-port-deck stop tunnel --port 5000 --yes
-port-deck stop group --port 5000 --yes
-port-deck stop dev --project storefront --all --yes
+npm install --global strayd
+strayd
 ```
 
-`list` 与 `stop` 支持 `--id`、`--port/-p`、`--project`、`--origin windows|wsl`、`--distro` 和 `--runtime`。`stop` 匹配多项时必须显式传 `--all`，实际关闭前需要交互确认或传 `--yes`；`--dry-run` 只打印执行计划。
+无子命令时进入 TUI，也可用于脚本：
 
-## 能做什么
+```bash
+strayd list
+strayd list --kind tunnel --json
+strayd list --platform linux --port 5000
+strayd stop tunnel --port 5000 --dry-run
+strayd stop tunnel --port 5000 --yes
+strayd stop group --port 5000 --yes
+strayd stop dev --project storefront --all --yes
+```
 
-- 扫描 Windows 与所有运行中的 WSL 发行版，按进程合并多个监听端口。
-- 即使没有本地监听端口，也会发现 `cloudflared`、ngrok、SSH `-R`、autossh、frpc、localtunnel 与 bore 隧道。
-- 从隧道命令中提取本地目标（如 `cloudflared --url http://localhost:5000`），将同一 Windows / WSL 执行域里的隧道与 `:5000` 监听服务自动关联成组。
-- 展示端口、PID、命令行、工作目录、项目名、发行版和关联的 systemd unit。
-- 识别 Next.js、Vite、Nuxt、Astro、SvelteKit、Remix、Angular、Storybook、Webpack、Rspack、Parcel、Node.js、Bun 与 Deno。
-- 支持按端口、项目、隧道、进程或路径搜索，并按 Windows / WSL、开发服务、隧道和系统服务筛选。
-- 两次确认后结束整个进程树；执行前再次比对进程启动标识，避免 PID 已复用时误杀新进程。
-- systemd 托管的隧道会停止对应 unit，避免被自动重启；`sshd` 会展示，但不提供结束操作。
-- 关联组同时提供“仅关服务”“仅关隧道”和二次确认的“关闭整组”；组内有受保护资源时不会提供可能误导的整组关闭操作。
-- 关闭窗口后留在系统托盘；左键托盘图标恢复窗口。
+`list` 与 `stop` 支持 `--id`、`--port/-p`、`--project`、`--platform windows|linux|macos` 和 `--runtime`。停止命令匹配多项时必须显式传 `--all`；实际关闭前需要交互确认或传 `--yes`，`--dry-run` 只打印计划。
 
-`docker-desktop` 与 `docker-desktop-data` 是内部发行版，不会进入 WSL 扫描；Docker 映射到 Windows 的监听端口仍会由 Windows 扫描发现。
+TUI 使用 `Tab` 或 `1-4` 切页，`j/k` 选择，`d` 关闭开发服务，`t` 关闭隧道，`x` 关闭整个关联组，`r` 刷新，`q` 退出。
 
-## 开发
+## 平台行为
+
+- Linux 与 WSL：都按 Linux 宿主直接读取端口和进程，不调用 `wsl.exe`。systemd 托管的服务会尝试停止对应 unit。
+- Windows：使用 Windows 原生端口/进程接口扫描，并通过 `taskkill /T /F` 结束进程树。
+- macOS：使用 macOS 原生端口/进程接口扫描，通过 `TERM` 后再 `KILL` 的方式结束进程树。
+
+端口枚举基于 `netstat2` 的系统 API，进程枚举与身份校验基于 `sysinfo`。Strayd 会识别常见前端运行时以及 cloudflared、ngrok、SSH 反向转发、frpc、localtunnel 和 bore；隧道命令中的本地目标会与对应监听端口组成同一资源组。`sshd` 会展示，但始终受保护，不能被停止。
+
+部分系统进程的端口或命令行可能受操作系统权限限制；此时工具只展示当前用户有权读取的信息，不会触发提权提示。
+
+## 本地开发
 
 ```bash
 bun install
-cargo test -p port-deck-core
-bun run dev
+bun test
+bun run check
+bun run pack:cli
 ```
 
-`bun run dev` 可在浏览器里查看带模拟数据的界面。`bun tauri dev` 在 WSL 中运行的是 Linux 调试版；正式 Windows 行为以交叉编译产物为准。
-
-## 从 WSL 打包 Windows 安装器
-
-开发机已配置 Rust stable、MSVC target、cargo-xwin、LLVM/LLD 与 NSIS，直接运行：
-
-```bash
-bun run build:windows
-```
-
-产物位于：
-
-```text
-target/x86_64-pc-windows-msvc/release/bundle/nsis/
-```
-
-WSL 可以生成 NSIS `setup.exe`；MSI 仍要求在 Windows 上使用 WiX 构建。首次交叉编译会下载 Windows SDK 到 `~/.cache/cargo-xwin`，后续项目可以复用。
-
-## 扫描与终止边界
-
-WSL 扫描通过 `wsl.exe --list --running --quiet` 获取已运行发行版，再以 root 读取 `ss`、`/proc` 与 cgroup；不会为了扫描而启动已停止的发行版。发行版缺少 `ss` 时，界面会明确提示安装 `iproute2`。
-
-终止 Windows 资源使用 `taskkill /T /F`，终止普通 WSL 资源会先向目标及其后代发送 `TERM`，短暂等待后仅对仍存活的同一进程树发送 `KILL`。如果进程属于 systemd unit，则改为调用 system manager 或对应用户的 user manager 停止 unit。所有路径都会再次校验进程身份；后端也会拒绝结束 `sshd`。Windows 受保护进程仍可能要求以管理员身份运行 Port Deck。
+`bun run pack:cli` 只装箱当前宿主的二进制。完整发布包由 `build-npm.yml` 在 Linux、Windows、macOS 的 x64/arm64 宿主上分别原生构建后统一装箱。

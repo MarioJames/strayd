@@ -38,19 +38,29 @@ pub enum ResourceKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ProcessOrigin {
+pub enum HostPlatform {
     Windows,
-    Wsl,
+    Linux,
+    MacOs,
+}
+
+impl HostPlatform {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+            Self::MacOs => "macos",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceProcess {
     pub id: String,
-    pub origin: ProcessOrigin,
-    pub distribution: Option<String>,
+    pub platform: HostPlatform,
     pub pid: u32,
     pub parent_pid: u32,
     pub ports: Vec<u16>,
@@ -155,6 +165,15 @@ pub fn classify_runtime(process_name: &str, command: &str) -> RuntimeKind {
         .next()
         .unwrap_or(process_name)
         .to_ascii_lowercase();
+    let command_executable = command
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['"', '\''])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
     if matches!(executable.as_str(), "cloudflared" | "cloudflared.exe") {
         RuntimeKind::Cloudflared
@@ -253,17 +272,17 @@ pub fn classify_runtime(process_name: &str, command: &str) -> RuntimeKind {
         ],
     ) {
         RuntimeKind::Vite
-    } else if process_name.eq_ignore_ascii_case("bun")
-        || process_name.eq_ignore_ascii_case("bun.exe")
+    } else if matches!(executable.as_str(), "bun" | "bun.exe")
+        || matches!(command_executable.as_str(), "bun" | "bun.exe")
         || value.contains(" bun run ")
     {
         RuntimeKind::Bun
-    } else if process_name.eq_ignore_ascii_case("deno")
-        || process_name.eq_ignore_ascii_case("deno.exe")
+    } else if matches!(executable.as_str(), "deno" | "deno.exe")
+        || matches!(command_executable.as_str(), "deno" | "deno.exe")
     {
         RuntimeKind::Deno
-    } else if process_name.eq_ignore_ascii_case("node")
-        || process_name.eq_ignore_ascii_case("node.exe")
+    } else if matches!(executable.as_str(), "node" | "node.exe")
+        || matches!(command_executable.as_str(), "node" | "node.exe")
     {
         RuntimeKind::Node
     } else {
@@ -303,144 +322,15 @@ pub fn extract_tunnel_target(runtime: &RuntimeKind, command: &str) -> Option<Tun
     }
 }
 
-pub fn is_application_dev_service(
-    service: &ServiceProcess,
-    application_name: &str,
-    dev_port: u16,
-) -> bool {
-    service.resource_kind == ResourceKind::Development
-        && service.runtime == RuntimeKind::Vite
-        && service.ports.contains(&dev_port)
-        && service
-            .project_name
-            .as_deref()
-            .is_some_and(|name| name.eq_ignore_ascii_case(application_name))
-}
-
-pub fn parse_wsl_snapshot(distribution: &str, snapshot: &str) -> Vec<ServiceProcess> {
-    #[derive(Debug)]
-    struct ProcessMetadata {
-        parent_pid: u32,
-        process_name: String,
-        command: String,
-        cwd: Option<String>,
-        manager_unit: Option<String>,
-        start_token: String,
-    }
-
-    let mut processes = BTreeMap::<u32, ProcessMetadata>::new();
-    let mut listeners = Vec::<(u32, u16, String)>::new();
-
-    for record in snapshot.split('\x1e') {
-        if let Some(payload) = record.strip_prefix("P\x1f") {
-            let fields = payload.splitn(5, '\x1f').collect::<Vec<_>>();
-            if fields.len() != 5 {
-                continue;
-            }
-            let Ok(pid) = fields[0].parse::<u32>() else {
-                continue;
-            };
-            let Some((parent_pid, process_name, start_token)) = parse_proc_stat(fields[1]) else {
-                continue;
-            };
-            let cwd = normalized_optional(fields[2]);
-            let manager_unit =
-                normalized_optional(fields[3]).filter(|unit| is_safe_service_unit(unit));
-            processes.insert(
-                pid,
-                ProcessMetadata {
-                    parent_pid,
-                    process_name,
-                    command: fields[4].trim().to_owned(),
-                    cwd,
-                    manager_unit,
-                    start_token,
-                },
-            );
-        } else if let Some(line) = record.strip_prefix("S\x1f") {
-            let Some((host, port)) = parse_socket_address(line) else {
-                continue;
-            };
-            for pid in parse_socket_pids(line) {
-                listeners.push((pid, port, host.clone()));
-            }
-        }
-    }
-
-    let mut grouped = BTreeMap::<u32, ServiceProcess>::new();
-    for (pid, port, host) in listeners {
-        let Some(metadata) = processes.get(&pid) else {
-            continue;
-        };
-        let runtime = classify_runtime(&metadata.process_name, &metadata.command);
-        let resource_kind = resource_kind_for(&runtime);
-        let can_terminate = can_terminate_runtime(&runtime);
-        let tunnel_target = extract_tunnel_target(&runtime, &metadata.command);
-        let service = grouped.entry(pid).or_insert_with(|| ServiceProcess {
-            id: format!("wsl:{distribution}:{pid}:{}", metadata.start_token),
-            origin: ProcessOrigin::Wsl,
-            distribution: Some(distribution.to_owned()),
-            pid,
-            parent_pid: metadata.parent_pid,
-            ports: Vec::new(),
-            hosts: Vec::new(),
-            process_name: metadata.process_name.clone(),
-            command: metadata.command.clone(),
-            cwd: metadata.cwd.clone(),
-            project_name: metadata.cwd.as_deref().and_then(project_name),
-            runtime,
-            resource_kind,
-            can_terminate,
-            manager_unit: metadata.manager_unit.clone(),
-            tunnel_target,
-            start_token: metadata.start_token.clone(),
-        });
-        push_listener(service, port, host);
-    }
-
-    for (pid, metadata) in processes {
-        if grouped.contains_key(&pid) {
-            continue;
-        }
-        let runtime = classify_runtime(&metadata.process_name, &metadata.command);
-        if resource_kind_for(&runtime) != ResourceKind::Tunnel {
-            continue;
-        }
-        let resource_kind = resource_kind_for(&runtime);
-        let can_terminate = can_terminate_runtime(&runtime);
-        let tunnel_target = extract_tunnel_target(&runtime, &metadata.command);
-        grouped.insert(
-            pid,
-            ServiceProcess {
-                id: format!("wsl:{distribution}:{pid}:{}", metadata.start_token),
-                origin: ProcessOrigin::Wsl,
-                distribution: Some(distribution.to_owned()),
-                pid,
-                parent_pid: metadata.parent_pid,
-                ports: Vec::new(),
-                hosts: Vec::new(),
-                process_name: metadata.process_name,
-                command: metadata.command,
-                cwd: metadata.cwd.clone(),
-                project_name: metadata.cwd.as_deref().and_then(project_name),
-                runtime,
-                resource_kind,
-                can_terminate,
-                manager_unit: metadata.manager_unit,
-                tunnel_target,
-                start_token: metadata.start_token,
-            },
-        );
-    }
-
-    finish_grouping(grouped)
-}
-
-pub fn group_native_listeners(records: Vec<NativeListenerRecord>) -> Vec<ServiceProcess> {
-    group_native_resources(records, Vec::new())
+pub fn group_native_listeners(
+    platform: HostPlatform,
+    records: Vec<NativeListenerRecord>,
+) -> Vec<ServiceProcess> {
+    group_native_resources(platform, records, Vec::new())
 }
 
 pub fn group_native_resources(
+    platform: HostPlatform,
     records: Vec<NativeListenerRecord>,
     processes: Vec<NativeProcessRecord>,
 ) -> Vec<ServiceProcess> {
@@ -453,9 +343,13 @@ pub fn group_native_resources(
         let can_terminate = can_terminate_runtime(&runtime);
         let tunnel_target = extract_tunnel_target(&runtime, &record.command);
         let service = grouped.entry(key).or_insert_with(|| ServiceProcess {
-            id: format!("windows:{}:{}", record.pid, record.start_token),
-            origin: ProcessOrigin::Windows,
-            distribution: None,
+            id: format!(
+                "{}:{}:{}",
+                platform.as_str(),
+                record.pid,
+                record.start_token
+            ),
+            platform,
             pid: record.pid,
             parent_pid: record.parent_pid,
             ports: Vec::new(),
@@ -481,7 +375,7 @@ pub fn group_native_resources(
         }
         let runtime = classify_runtime(&process.process_name, &process.command);
         let resource_kind = resource_kind_for(&runtime);
-        if resource_kind != ResourceKind::Tunnel {
+        if !matches!(resource_kind, ResourceKind::Tunnel | ResourceKind::System) {
             continue;
         }
         let can_terminate = can_terminate_runtime(&runtime);
@@ -489,9 +383,13 @@ pub fn group_native_resources(
         grouped.insert(
             key,
             ServiceProcess {
-                id: format!("windows:{}:{}", process.pid, process.start_token),
-                origin: ProcessOrigin::Windows,
-                distribution: None,
+                id: format!(
+                    "{}:{}:{}",
+                    platform.as_str(),
+                    process.pid,
+                    process.start_token
+                ),
+                platform,
                 pid: process.pid,
                 parent_pid: process.parent_pid,
                 ports: Vec::new(),
@@ -514,7 +412,7 @@ pub fn group_native_resources(
 }
 
 pub fn group_related_services(services: Vec<ServiceProcess>) -> Vec<ResourceGroup> {
-    let mut listeners = BTreeMap::<(u8, String, u16), Vec<usize>>::new();
+    let mut listeners = BTreeMap::<(HostPlatform, u16), Vec<usize>>::new();
     for (index, service) in services.iter().enumerate() {
         if service.resource_kind == ResourceKind::Tunnel {
             continue;
@@ -708,16 +606,8 @@ fn ssh_reverse_target(arguments: &[&str]) -> Option<TunnelTarget> {
     })
 }
 
-fn execution_scope(service: &ServiceProcess, port: u16) -> (u8, String, u16) {
-    let origin = match service.origin {
-        ProcessOrigin::Windows => 0,
-        ProcessOrigin::Wsl => 1,
-    };
-    (
-        origin,
-        service.distribution.clone().unwrap_or_default(),
-        port,
-    )
+fn execution_scope(service: &ServiceProcess, port: u16) -> (HostPlatform, u16) {
+    (service.platform, port)
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -728,57 +618,11 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-fn normalized_optional(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
-}
-
 fn project_name(path: &str) -> Option<String> {
     path.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .find(|segment| !segment.is_empty())
         .map(str::to_owned)
-}
-
-fn parse_proc_stat(stat: &str) -> Option<(u32, String, String)> {
-    let command_start = stat.find('(')? + 1;
-    let command_end = stat.rfind(") ")?;
-    let process_name = stat[command_start..command_end].to_owned();
-    let fields = stat[command_end + 2..]
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    let parent_pid = fields.get(1)?.parse::<u32>().ok()?;
-    let start_token = fields.get(19)?.to_string();
-    Some((parent_pid, process_name, start_token))
-}
-
-fn parse_socket_address(line: &str) -> Option<(String, u16)> {
-    let local = line.split_whitespace().nth(3)?;
-    let split_at = local.rfind(':')?;
-    let host = local[..split_at]
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_owned();
-    let port = local[split_at + 1..].parse::<u16>().ok()?;
-    Some((host, port))
-}
-
-fn parse_socket_pids(line: &str) -> Vec<u32> {
-    let mut remaining = line;
-    let mut pids = Vec::new();
-    while let Some(offset) = remaining.find("pid=") {
-        remaining = &remaining[offset + 4..];
-        let digits = remaining
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect::<String>();
-        if let Ok(pid) = digits.parse::<u32>()
-            && !pids.contains(&pid)
-        {
-            pids.push(pid);
-        }
-    }
-    pids
 }
 
 fn push_listener(service: &mut ServiceProcess, port: u16, host: String) {

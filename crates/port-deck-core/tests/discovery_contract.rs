@@ -1,12 +1,11 @@
 use port_deck_core::{
-    IdentityError, NativeListenerRecord, NativeProcessRecord, ProcessOrigin, ResourceKind,
-    RuntimeKind, ServiceProcess, TunnelTarget, classify_runtime, decode_command_output,
-    ensure_process_identity, extract_tunnel_target, group_native_resources, group_related_services,
-    is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
+    HostPlatform, IdentityError, NativeListenerRecord, NativeProcessRecord, ResourceKind,
+    RuntimeKind, TunnelTarget, classify_runtime, decode_command_output, ensure_process_identity,
+    extract_tunnel_target, group_native_resources, group_related_services, is_safe_service_unit,
 };
 
 #[test]
-fn decodes_utf16le_output_emitted_by_wsl_exe() {
+fn decodes_utf16le_command_output() {
     let bytes = [
         b'D', 0, b'e', 0, b'b', 0, b'i', 0, b'a', 0, b'n', 0, b'\r', 0, b'\n', 0,
     ];
@@ -27,6 +26,7 @@ fn groups_native_listeners_for_the_same_process() {
         start_token: "13432622".into(),
     };
     let services = group_native_resources(
+        HostPlatform::Windows,
         vec![
             base.clone(),
             NativeListenerRecord {
@@ -40,7 +40,7 @@ fn groups_native_listeners_for_the_same_process() {
 
     assert_eq!(services.len(), 1);
     let service = &services[0];
-    assert_eq!(service.origin, ProcessOrigin::Windows);
+    assert_eq!(service.platform, HostPlatform::Windows);
     assert_eq!(service.ports, vec![5173, 24678]);
     assert_eq!(service.runtime, RuntimeKind::Vite);
     assert_eq!(service.resource_kind, ResourceKind::Development);
@@ -68,6 +68,11 @@ fn recognizes_common_frontend_dev_runtimes() {
             RuntimeKind::Vite,
         ),
         (
+            "MainThread",
+            "/usr/bin/node -e require('http').createServer()",
+            RuntimeKind::Node,
+        ),
+        (
             "node",
             "node .output/server/index.mjs nuxt",
             RuntimeKind::Nuxt,
@@ -85,6 +90,7 @@ fn recognizes_common_frontend_dev_runtimes() {
 #[test]
 fn discovers_tunnels_without_listening_ports() {
     let services = group_native_resources(
+        HostPlatform::MacOs,
         Vec::new(),
         vec![NativeProcessRecord {
             pid: 9400,
@@ -98,6 +104,7 @@ fn discovers_tunnels_without_listening_ports() {
 
     assert_eq!(services.len(), 1);
     let tunnel = &services[0];
+    assert_eq!(tunnel.platform, HostPlatform::MacOs);
     assert_eq!(tunnel.runtime, RuntimeKind::Cloudflared);
     assert_eq!(tunnel.resource_kind, ResourceKind::Tunnel);
     assert!(tunnel.ports.is_empty());
@@ -180,7 +187,11 @@ fn groups_a_tunnel_with_its_source_service_in_the_same_scope() {
         start_token: "31010".into(),
     }];
 
-    let groups = group_related_services(group_native_resources(listeners, tunnels));
+    let groups = group_related_services(group_native_resources(
+        HostPlatform::Windows,
+        listeners,
+        tunnels,
+    ));
 
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].primary_port, Some(5000));
@@ -194,7 +205,8 @@ fn groups_a_tunnel_with_its_source_service_in_the_same_scope() {
 
 #[test]
 fn does_not_group_same_numbered_ports_across_execution_scopes() {
-    let native = group_native_resources(
+    let windows = group_native_resources(
+        HostPlatform::Windows,
         vec![NativeListenerRecord {
             port: 5000,
             host: "127.0.0.1".into(),
@@ -207,56 +219,23 @@ fn does_not_group_same_numbered_ports_across_execution_scopes() {
         }],
         Vec::new(),
     );
-    let wsl = parse_wsl_snapshot(
-        "Debian",
-        concat!(
-            "PORTDECK/2\x1e",
-            "P\x1f8300\x1f8300 (cloudflared) S 1 8300 8300 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 32000\x1f/home/mocha/catalog-api\x1f\x1fcloudflared tunnel --url http://localhost:5000\x1e",
-        ),
+    let linux = group_native_resources(
+        HostPlatform::Linux,
+        Vec::new(),
+        vec![NativeProcessRecord {
+            pid: 8300,
+            parent_pid: 1,
+            process_name: "cloudflared".into(),
+            command: "cloudflared tunnel --url http://localhost:5000".into(),
+            cwd: Some("/home/mocha/catalog-api".into()),
+            start_token: "32000".into(),
+        }],
     );
 
-    let groups = group_related_services(native.into_iter().chain(wsl).collect());
+    let groups = group_related_services(windows.into_iter().chain(linux).collect());
 
     assert_eq!(groups.len(), 2);
     assert!(groups.iter().all(|group| group.services.len() == 1));
-}
-
-#[test]
-fn identifies_only_the_application_own_dev_service() {
-    let port_deck = group_native_resources(
-        vec![NativeListenerRecord {
-            port: 1420,
-            host: "127.0.0.1".into(),
-            pid: 8800,
-            parent_pid: 8700,
-            process_name: "node.exe".into(),
-            command: r#"node.exe node_modules\vite\bin\vite.js"#.into(),
-            cwd: Some(r"C:\Projects\port-deck".into()),
-            start_token: "12500".into(),
-        }],
-        Vec::new(),
-    )
-    .remove(0);
-    let another_project = ServiceProcess {
-        project_name: Some("customer-portal".into()),
-        ..port_deck.clone()
-    };
-    let another_port = ServiceProcess {
-        ports: vec![5173],
-        ..port_deck.clone()
-    };
-
-    assert!(is_application_dev_service(&port_deck, "port-deck", 1420));
-    assert!(!is_application_dev_service(
-        &another_project,
-        "port-deck",
-        1420
-    ));
-    assert!(!is_application_dev_service(
-        &another_port,
-        "port-deck",
-        1420
-    ));
 }
 
 #[test]
@@ -286,34 +265,51 @@ fn recognizes_tunnel_clients_and_protects_sshd() {
         assert_eq!(classify_runtime(name, command), expected, "{command}");
     }
 
-    let snapshot = concat!(
-        "PORTDECK/2\x1e",
-        "S\x1fLISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=222,fd=3))\x1e",
-        "P\x1f222\x1f222 (sshd) S 1 222 222 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 6000\x1f/\x1fssh.service\x1f/usr/sbin/sshd -D\x1e",
-    );
-    let sshd = parse_wsl_snapshot("Debian", snapshot).remove(0);
+    let sshd = group_native_resources(
+        HostPlatform::Linux,
+        Vec::new(),
+        vec![NativeProcessRecord {
+            pid: 222,
+            parent_pid: 1,
+            process_name: "sshd".into(),
+            command: "/usr/sbin/sshd -D".into(),
+            cwd: Some("/".into()),
+            start_token: "6000".into(),
+        }],
+    )
+    .remove(0);
     assert_eq!(sshd.resource_kind, ResourceKind::System);
     assert!(!sshd.can_terminate);
-    assert_eq!(sshd.manager_unit.as_deref(), Some("ssh.service"));
 }
 
 #[test]
-fn joins_wsl_listeners_with_process_metadata_and_groups_ports() {
-    let snapshot = concat!(
-        "PORTDECK/2\x1e",
-        "S\x1fLISTEN 0 511 0.0.0.0:3000 0.0.0.0:* users:((\"next-server\",pid=412,fd=21))\x1e",
-        "S\x1fLISTEN 0 511 [::]:3000 [::]:* users:((\"next-server\",pid=412,fd=23))\x1e",
-        "S\x1fLISTEN 0 511 [::1]:3001 [::]:* users:((\"next-server\",pid=412,fd=22))\x1e",
-        "S\x1fLISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\x1e",
-        "P\x1f412\x1f412 (next-server) S 1 412 412 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 9876\x1f/home/mocha/workspaces/shop-ui\x1f\x1fnode node_modules/next/dist/bin/next dev\x1e",
+fn groups_linux_listeners_with_process_metadata() {
+    let base = NativeListenerRecord {
+        port: 3000,
+        host: "0.0.0.0".into(),
+        pid: 412,
+        parent_pid: 1,
+        process_name: "next-server".into(),
+        command: "node node_modules/next/dist/bin/next dev".into(),
+        cwd: Some("/home/mocha/workspaces/shop-ui".into()),
+        start_token: "9876".into(),
+    };
+    let services = group_native_resources(
+        HostPlatform::Linux,
+        vec![
+            base.clone(),
+            NativeListenerRecord {
+                port: 3001,
+                host: "::1".into(),
+                ..base
+            },
+        ],
+        Vec::new(),
     );
-
-    let services = parse_wsl_snapshot("Debian", snapshot);
 
     assert_eq!(services.len(), 1);
     let service = &services[0];
-    assert_eq!(service.origin, ProcessOrigin::Wsl);
-    assert_eq!(service.distribution.as_deref(), Some("Debian"));
+    assert_eq!(service.platform, HostPlatform::Linux);
     assert_eq!(service.pid, 412);
     assert_eq!(service.parent_pid, 1);
     assert_eq!(service.ports, vec![3000, 3001]);
@@ -327,27 +323,6 @@ fn joins_wsl_listeners_with_process_metadata_and_groups_ports() {
     assert_eq!(service.resource_kind, ResourceKind::Development);
     assert!(service.can_terminate);
     assert_eq!(service.start_token, "9876");
-}
-
-#[test]
-fn wsl_snapshot_keeps_unbound_tunnels_and_their_systemd_unit() {
-    let snapshot = concat!(
-        "PORTDECK/2\x1e",
-        "P\x1f730\x1f730 (ssh) S 1 730 730 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 44000\x1f/root\x1faliyunhost-reverse-tunnel.service\x1f/usr/bin/ssh -NT -R 0.0.0.0:33:127.0.0.1:22 aliyun\x1e",
-        "P\x1f731\x1f731 (sleep) S 1 731 731 0 -1 4194560 10 0 0 0 1 0 0 0 20 0 1 0 44001\x1f/tmp\x1f\x1fsleep 30\x1e",
-    );
-
-    let services = parse_wsl_snapshot("Debian", snapshot);
-
-    assert_eq!(services.len(), 1);
-    let tunnel = &services[0];
-    assert_eq!(tunnel.runtime, RuntimeKind::SshTunnel);
-    assert_eq!(tunnel.resource_kind, ResourceKind::Tunnel);
-    assert!(tunnel.ports.is_empty());
-    assert_eq!(
-        tunnel.manager_unit.as_deref(),
-        Some("aliyunhost-reverse-tunnel.service")
-    );
 }
 
 #[test]

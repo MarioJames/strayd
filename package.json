@@ -1,31 +1,12 @@
 {
-  "name": "port-deck",
+  "name": "strayd-workspace",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "build:cli": "cargo build --release -p port-deck-cli --target-dir target/port-deck-cli-linux",
-    "build:cli:windows": "bash scripts/build-cli-windows.sh",
-    "build:windows": "bash scripts/build-windows.sh",
-    "pack:cli": "bun run build:cli && bun run build:cli:windows && bun scripts/stage-npm-package.ts && cd npm/port-deck-cli && bun pm pack --destination ../../dist/npm",
-    "preview": "vite preview",
+    "build": "cargo build --release -p port-deck-cli",
+    "pack:cli": "bun run build && bun scripts/stage-npm-package.ts && cd npm/strayd && bun pm pack --destination ../../dist/npm",
     "test": "cargo test --workspace",
-    "tauri": "tauri"
-  },
-  "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
-    "lucide-react": "^1.39.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6.1.1",
-    "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
   }
 }

@@ -1,0 +1,29 @@
+{
+  "name": "strayd",
+  "version": "0.1.0",
+  "description": "Cross-platform TUI and commands for managing local development services and tunnels",
+  "license": "MIT",
+  "bin": {
+    "strayd": "bin/strayd.cjs"
+  },
+  "files": [
+    "bin",
+    "native",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "tui",
+    "cross-platform",
+    "linux",
+    "windows",
+    "macos",
+    "ports",
+    "development-server",
+    "cloudflare-tunnel"
+  ],
+  "preferGlobal": true
+}

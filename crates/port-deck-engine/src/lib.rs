@@ -1,104 +1,28 @@
 use std::{
-    process::{Command, Output},
-    thread,
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use std::process::Output;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::{collections::BTreeSet, thread, time::Duration};
+
+use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState, get_sockets_info};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use port_deck_core::decode_command_output;
 use port_deck_core::{
-    ProcessOrigin, ResourceGroup, ResourceKind, ServiceProcess, decode_command_output,
-    group_related_services, is_application_dev_service, is_safe_service_unit, parse_wsl_snapshot,
+    HostPlatform, NativeListenerRecord, NativeProcessRecord, ResourceGroup, ResourceKind,
+    RuntimeKind, ServiceProcess, classify_runtime, ensure_process_identity, group_native_resources,
+    group_related_services, is_safe_service_unit,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use sysinfo::Signal;
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-#[cfg(target_os = "windows")]
-use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, TcpState, get_sockets_info};
-#[cfg(target_os = "windows")]
-use port_deck_core::{
-    NativeListenerRecord, NativeProcessRecord, RuntimeKind, classify_runtime,
-    ensure_process_identity, group_native_resources,
-};
-#[cfg(target_os = "windows")]
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-
-const WSL_SNAPSHOT_SCRIPT: &str = r#"
-printf 'PORTDECK/2\036'
-if ! command -v ss >/dev/null 2>&1; then
-  printf 'E\037iproute2-not-installed\036'
-  exit 0
-fi
-ss -H -ltnp 2>/dev/null | while IFS= read -r line; do
-  clean=$(printf '%s' "$line" | tr '\036\037' '  ')
-  printf 'S\037%s\036' "$clean"
-done
-for proc in /proc/[0-9]*; do
-  pid=${proc##*/}
-  stat=$(cat "$proc/stat" 2>/dev/null) || continue
-  cwd=$(readlink "$proc/cwd" 2>/dev/null | tr '\036\037' '  ')
-  unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "$proc/cgroup" 2>/dev/null | tail -n 1 | tr '\036\037' '  ')
-  command=$(tr '\000\036\037' '   ' < "$proc/cmdline" 2>/dev/null)
-  [ -n "$command" ] || continue
-  printf 'P\037%s\037%s\037%s\037%s\037%s\036' "$pid" "$stat" "$cwd" "$unit" "$command"
-done
-"#;
-
-const WSL_TERMINATE_SCRIPT: &str = r#"
-pid=$1
-expected=$2
-unit=$3
-case "$pid" in (*[!0-9]*|'') exit 46;; esac
-[ "$pid" -gt 1 ] || exit 46
-stat=$(cat "/proc/$pid/stat" 2>/dev/null) || exit 45
-rest=${stat##*) }
-set -- $rest
-shift 19
-current=$1
-[ "$current" = "$expected" ] || exit 44
-comm=$(cat "/proc/$pid/comm" 2>/dev/null)
-case "$comm" in (sshd|sshd.exe) exit 48;; esac
-if [ -n "$unit" ]; then
-  case "$unit" in
-    (*[!A-Za-z0-9_.@:\\-]*|[!A-Za-z0-9]*) exit 47;;
-    (*.service) ;;
-    (*) exit 47;;
-  esac
-  found=0
-  user_unit=0
-  while IFS= read -r cgroup; do
-    path=${cgroup#*:*:}
-    case "/$path/" in (*"/$unit/"*) found=1;; esac
-    case "$path" in (/user.slice/*) user_unit=1;; esac
-  done < "/proc/$pid/cgroup"
-  [ "$found" -eq 1 ] || exit 47
-  if [ "$user_unit" -eq 1 ]; then
-    uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$pid/status")
-    user=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1)
-    [ -n "$user" ] || exit 49
-    runuser -u "$user" -- env "XDG_RUNTIME_DIR=/run/user/$uid" systemctl --user stop -- "$unit" || exit 49
-  else
-    systemctl stop -- "$unit" || exit 49
-  fi
-  exit 0
-fi
-children_of() {
-  wanted=$1
-  for status in /proc/[0-9]*/status; do
-    child=${status#/proc/}; child=${child%/status}
-    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "$status" 2>/dev/null)
-    [ "$parent" = "$wanted" ] && printf '%s\n' "$child"
-  done
-}
-collect_tree() {
-  target=$1
-  for child in $(children_of "$target"); do collect_tree "$child"; done
-  printf '%s\n' "$target"
-}
-targets=$(collect_tree "$pid")
-kill -TERM $targets 2>/dev/null || true
-sleep 0.8
-for target in $targets; do
-  [ -d "/proc/$target" ] && kill -KILL "$target" 2>/dev/null || true
-done
-"#;
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+compile_error!("Strayd currently supports Windows, Linux, and macOS only");
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,62 +35,33 @@ pub struct ScanSnapshot {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminateRequest {
-    pub origin: ProcessOrigin,
-    pub distribution: Option<String>,
+    pub platform: HostPlatform,
     pub pid: u32,
     pub start_token: String,
     pub manager_unit: Option<String>,
 }
 
+pub const fn host_platform() -> HostPlatform {
+    #[cfg(target_os = "windows")]
+    return HostPlatform::Windows;
+
+    #[cfg(target_os = "linux")]
+    return HostPlatform::Linux;
+
+    #[cfg(target_os = "macos")]
+    return HostPlatform::MacOs;
+}
+
 pub fn scan_all() -> ScanSnapshot {
-    scan_all_with_exclusion(None)
-}
+    let (services, warnings) = match scan_host_services() {
+        Ok(services) => (services, Vec::new()),
+        Err(error) => (
+            Vec::new(),
+            vec![format!("{}: {error}", platform_label(host_platform()))],
+        ),
+    };
 
-pub fn scan_all_excluding(application_name: &str, dev_port: u16) -> ScanSnapshot {
-    scan_all_with_exclusion(Some((application_name, dev_port)))
-}
-
-fn scan_all_with_exclusion(exclusion: Option<(&str, u16)>) -> ScanSnapshot {
-    let native_scan = thread::spawn(scan_native_services);
-    let mut warnings = Vec::new();
-    let mut services = Vec::new();
-
-    match running_wsl_distributions() {
-        Ok(distributions) => {
-            let scans = distributions
-                .into_iter()
-                .filter(|distribution| !is_internal_distribution(distribution))
-                .map(|distribution| {
-                    thread::spawn(move || {
-                        let result = scan_wsl_distribution(&distribution);
-                        (distribution, result)
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            for scan in scans {
-                match scan.join() {
-                    Ok((_, Ok(mut found))) => services.append(&mut found),
-                    Ok((distribution, Err(error))) => {
-                        warnings.push(format!("{distribution}: {error}"));
-                    }
-                    Err(_) => warnings.push("某个 WSL 扫描任务意外退出".into()),
-                }
-            }
-        }
-        Err(error) => warnings.push(format!("WSL: {error}")),
-    }
-
-    match native_scan.join() {
-        Ok(Ok(mut found)) => services.append(&mut found),
-        Ok(Err(error)) => warnings.push(format!("Windows: {error}")),
-        Err(_) => warnings.push("Windows 扫描任务意外退出".into()),
-    }
-
-    if let Some((application_name, dev_port)) = exclusion {
-        services.retain(|service| !is_application_dev_service(service, application_name, dev_port));
-    }
-
+    let mut services = services;
     services.sort_by_key(|service| {
         let kind = match service.resource_kind {
             ResourceKind::Development => 0,
@@ -188,6 +83,9 @@ fn scan_all_with_exclusion(exclusion: Option<(&str, u16)>) -> ScanSnapshot {
 }
 
 pub fn terminate(request: TerminateRequest) -> Result<(), String> {
+    if request.platform != host_platform() {
+        return Err("目标资源不属于当前宿主平台，请重新扫描".into());
+    }
     if request.pid <= 4 || request.pid == std::process::id() {
         return Err("拒绝结束受保护的系统进程".into());
     }
@@ -202,17 +100,13 @@ pub fn terminate(request: TerminateRequest) -> Result<(), String> {
         return Err("systemd 服务名称无效，请重新扫描".into());
     }
 
-    match request.origin {
-        ProcessOrigin::Windows => terminate_native(&request),
-        ProcessOrigin::Wsl => terminate_wsl(&request),
-    }
+    terminate_host_process(&request)
 }
 
 impl From<&ServiceProcess> for TerminateRequest {
     fn from(service: &ServiceProcess) -> Self {
         Self {
-            origin: service.origin.clone(),
-            distribution: service.distribution.clone(),
+            platform: service.platform,
             pid: service.pid,
             start_token: service.start_token.clone(),
             manager_unit: service.manager_unit.clone(),
@@ -226,89 +120,14 @@ pub fn terminate_service(service: &ServiceProcess) -> Result<(), String> {
 
 pub fn open_local_service(port: u16) -> Result<(), String> {
     let url = format!("http://localhost:{port}");
-    Command::new("explorer.exe")
-        .arg(&url)
+    let mut command = open_command(&url);
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法打开 {url}: {error}"))
 }
 
-fn running_wsl_distributions() -> Result<Vec<String>, String> {
-    let output = quiet_command("wsl.exe")
-        .args(["--list", "--running", "--quiet"])
-        .output()
-        .map_err(|error| format!("无法运行 wsl.exe: {error}"))?;
-    ensure_success("读取运行中的发行版", &output)?;
-
-    Ok(decode_command_output(&output.stdout)
-        .lines()
-        .map(|line| line.trim_matches(['\0', '\r', ' ', '\t']))
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect())
-}
-
-fn scan_wsl_distribution(distribution: &str) -> Result<Vec<ServiceProcess>, String> {
-    let output = quiet_command("wsl.exe")
-        .args([
-            "--distribution",
-            distribution,
-            "--user",
-            "root",
-            "--exec",
-            "sh",
-            "-c",
-            WSL_SNAPSHOT_SCRIPT,
-        ])
-        .output()
-        .map_err(|error| format!("无法启动扫描: {error}"))?;
-    ensure_success("扫描监听端口", &output)?;
-    let snapshot = decode_command_output(&output.stdout);
-    if snapshot.contains("E\x1fiproute2-not-installed") {
-        return Err("缺少 ss 命令，请在该发行版安装 iproute2".into());
-    }
-    Ok(parse_wsl_snapshot(distribution, &snapshot))
-}
-
-fn terminate_wsl(request: &TerminateRequest) -> Result<(), String> {
-    let distribution = request
-        .distribution
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "缺少 WSL 发行版名称".to_string())?;
-    let pid = request.pid.to_string();
-    let output = quiet_command("wsl.exe")
-        .args([
-            "--distribution",
-            distribution,
-            "--user",
-            "root",
-            "--exec",
-            "sh",
-            "-c",
-            WSL_TERMINATE_SCRIPT,
-            "port-deck",
-            &pid,
-            &request.start_token,
-            request.manager_unit.as_deref().unwrap_or_default(),
-        ])
-        .output()
-        .map_err(|error| format!("无法调用 WSL: {error}"))?;
-
-    match output.status.code() {
-        Some(0) => Ok(()),
-        Some(44) => Err("进程已经变化，请重新扫描后再操作".into()),
-        Some(45) => Err("进程已经结束".into()),
-        Some(46) => Err("进程号无效".into()),
-        Some(47) => Err("systemd 托管关系已经变化，请重新扫描后再操作".into()),
-        Some(48) => Err("sshd 是受保护的远程入口，Port Deck 不会结束它".into()),
-        Some(49) => Err(command_error("停止 systemd 隧道服务", &output)),
-        _ => Err(command_error("结束 WSL 进程", &output)),
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
+fn scan_host_services() -> Result<Vec<ServiceProcess>, String> {
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -338,29 +157,19 @@ fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
             if pid <= 4 || pid == own_pid {
                 continue;
             }
-            let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) else {
+            let Some(process) = system.process(Pid::from_u32(pid)) else {
                 continue;
             };
-            let command = process
-                .cmd()
-                .iter()
-                .map(|part| part.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let metadata = process_metadata(pid, process);
             listener_records.push(NativeListenerRecord {
                 port: tcp.local_port,
                 host: tcp.local_addr.to_string(),
-                pid,
-                parent_pid: process
-                    .parent()
-                    .map(|value| value.as_u32())
-                    .unwrap_or_default(),
-                process_name: process.name().to_string_lossy().into_owned(),
-                command,
-                cwd: process
-                    .cwd()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                start_token: process.start_time().to_string(),
+                pid: metadata.pid,
+                parent_pid: metadata.parent_pid,
+                process_name: metadata.process_name,
+                command: metadata.command,
+                cwd: metadata.cwd,
+                start_token: metadata.start_token,
             });
         }
     }
@@ -370,47 +179,137 @@ fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
         .iter()
         .filter_map(|(pid, process)| {
             let pid = pid.as_u32();
-            if pid <= 4 || pid == own_pid {
-                return None;
-            }
-            Some(NativeProcessRecord {
-                pid,
-                parent_pid: process
-                    .parent()
-                    .map(|value| value.as_u32())
-                    .unwrap_or_default(),
-                process_name: process.name().to_string_lossy().into_owned(),
-                command: process
-                    .cmd()
-                    .iter()
-                    .map(|part| part.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                cwd: process
-                    .cwd()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                start_token: process.start_time().to_string(),
-            })
+            (pid > 4 && pid != own_pid).then(|| process_metadata(pid, process))
         })
         .collect();
 
-    Ok(group_native_resources(listener_records, process_records))
+    let services = group_native_resources(host_platform(), listener_records, process_records);
+    #[cfg(target_os = "linux")]
+    let services = services
+        .into_iter()
+        .map(|mut service| {
+            service.manager_unit = linux_manager_unit(service.pid);
+            service
+        })
+        .collect();
+    Ok(services)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn scan_native_services() -> Result<Vec<ServiceProcess>, String> {
-    Ok(Vec::new())
+fn process_metadata(pid: u32, process: &Process) -> NativeProcessRecord {
+    let process_name = process.name().to_string_lossy().into_owned();
+    let command = process
+        .cmd()
+        .iter()
+        .map(|part| part.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    NativeProcessRecord {
+        pid,
+        parent_pid: process
+            .parent()
+            .map(|value| value.as_u32())
+            .unwrap_or_default(),
+        process_name: process_name.clone(),
+        command: if command.is_empty() {
+            process_name
+        } else {
+            command
+        },
+        cwd: process
+            .cwd()
+            .map(|path| path.to_string_lossy().into_owned()),
+        start_token: process.start_time().to_string(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_manager_unit(pid: u32) -> Option<String> {
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+    parse_linux_manager_unit(&cgroup)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_manager_unit(cgroup: &str) -> Option<String> {
+    cgroup.lines().find_map(|line| {
+        let path = line.splitn(3, ':').nth(2)?;
+        path.split('/')
+            .rev()
+            .find(|segment| !segment.is_empty())
+            .filter(|segment| is_safe_service_unit(segment))
+            .map(str::to_owned)
+    })
 }
 
 #[cfg(target_os = "windows")]
-fn terminate_native(request: &TerminateRequest) -> Result<(), String> {
+fn terminate_host_process(request: &TerminateRequest) -> Result<(), String> {
+    let system = refreshed_process(request.pid);
+    ensure_terminable_identity(&system, request)?;
+
+    let output = quiet_command("taskkill.exe")
+        .args(["/PID", &request.pid.to_string(), "/T", "/F"])
+        .output()
+        .map_err(|error| format!("无法运行 taskkill.exe: {error}"))?;
+    ensure_success("结束 Windows 进程", &output)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminate_host_process(request: &TerminateRequest) -> Result<(), String> {
+    let mut system = refreshed_processes();
+    ensure_terminable_identity(&system, request)?;
+
+    #[cfg(target_os = "linux")]
+    if let Some(unit) = request.manager_unit.as_deref() {
+        return stop_linux_service(request.pid, unit);
+    }
+
+    let targets = process_tree(&system, Pid::from_u32(request.pid));
+    let mut signaled = false;
+    for (pid, _) in targets.iter().rev() {
+        if let Some(process) = system.process(*pid) {
+            signaled |= process.kill_with(Signal::Term) == Some(true);
+        }
+    }
+    if !signaled {
+        return Err("无法向目标进程发送 TERM；可能需要更高权限".into());
+    }
+
+    thread::sleep(Duration::from_millis(800));
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    for (pid, start_token) in targets.iter().rev() {
+        if let Some(process) = system.process(*pid)
+            && process.start_time().to_string() == *start_token
+        {
+            process.kill();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn refreshed_process(pid: u32) -> System {
     let mut system = System::new();
-    let pid = sysinfo::Pid::from_u32(request.pid);
+    let pid = Pid::from_u32(pid);
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
         true,
-        ProcessRefreshKind::nothing(),
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
     );
+    system
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn refreshed_processes() -> System {
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+    system
+}
+
+fn ensure_terminable_identity(system: &System, request: &TerminateRequest) -> Result<(), String> {
+    let pid = Pid::from_u32(request.pid);
     let actual = system
         .process(pid)
         .map(|process| process.start_time().to_string());
@@ -427,28 +326,92 @@ fn terminate_native(request: &TerminateRequest) -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(" ");
     if classify_runtime(&process.name().to_string_lossy(), &command) == RuntimeKind::Sshd {
-        return Err("sshd 是受保护的远程入口，Port Deck 不会结束它".into());
+        return Err("sshd 是受保护的远程入口，Strayd 不会结束它".into());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn process_tree(system: &System, root: Pid) -> Vec<(Pid, String)> {
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+    let mut result = Vec::new();
+    while let Some(parent) = pending.pop() {
+        if !visited.insert(parent) {
+            continue;
+        }
+        if let Some(process) = system.process(parent) {
+            result.push((parent, process.start_time().to_string()));
+        }
+        pending.extend(
+            system
+                .processes()
+                .iter()
+                .filter_map(|(pid, process)| (process.parent() == Some(parent)).then_some(*pid)),
+        );
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn stop_linux_service(pid: u32, unit: &str) -> Result<(), String> {
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .map_err(|_| "systemd 托管关系已经变化，请重新扫描".to_string())?;
+    let belongs_to_unit = cgroup.lines().any(|line| {
+        line.splitn(3, ':')
+            .nth(2)
+            .is_some_and(|path| path.split('/').any(|segment| segment == unit))
+    });
+    if !belongs_to_unit {
+        return Err("systemd 托管关系已经变化，请重新扫描".into());
     }
 
-    let output = quiet_command("taskkill.exe")
-        .args(["/PID", &request.pid.to_string(), "/T", "/F"])
+    let is_user_unit = cgroup.lines().any(|line| {
+        line.splitn(3, ':')
+            .nth(2)
+            .is_some_and(|path| path.contains("/user.slice/"))
+    });
+    let mut command = quiet_command("systemctl");
+    if is_user_unit {
+        command.arg("--user");
+    }
+    let output = command
+        .args(["stop", "--", unit])
         .output()
-        .map_err(|error| format!("无法运行 taskkill.exe: {error}"))?;
-    ensure_success("结束 Windows 进程", &output)
+        .map_err(|error| format!("无法运行 systemctl: {error}"))?;
+    ensure_success("停止 systemd 服务", &output)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn terminate_native(_request: &TerminateRequest) -> Result<(), String> {
-    Err("只能在 Windows 版本中结束 Windows 进程".into())
+#[cfg(target_os = "windows")]
+fn open_command(url: &str) -> Command {
+    let mut command = quiet_command("cmd.exe");
+    command.args(["/C", "start", "", url]);
+    command
 }
 
-fn is_internal_distribution(distribution: &str) -> bool {
-    matches!(
-        distribution.to_ascii_lowercase().as_str(),
-        "docker-desktop" | "docker-desktop-data"
-    )
+#[cfg(target_os = "macos")]
+fn open_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
 }
 
+#[cfg(target_os = "linux")]
+fn open_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
+}
+
+fn platform_label(platform: HostPlatform) -> &'static str {
+    match platform {
+        HostPlatform::Windows => "Windows",
+        HostPlatform::Linux => "Linux",
+        HostPlatform::MacOs => "macOS",
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_success(action: &str, output: &Output) -> Result<(), String> {
     if output.status.success() {
         Ok(())
@@ -457,6 +420,7 @@ fn ensure_success(action: &str, output: &Output) -> Result<(), String> {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn command_error(action: &str, output: &Output) -> String {
     let stderr = decode_command_output(&output.stderr);
     let detail = stderr.trim_matches(['\0', '\r', '\n', ' ']);
@@ -467,8 +431,9 @@ fn command_error(action: &str, output: &Output) -> String {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn quiet_command(program: &str) -> Command {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     return Command::new(program);
 
     #[cfg(target_os = "windows")]
@@ -480,4 +445,23 @@ fn quiet_command(program: &str) -> Command {
     }
     #[cfg(target_os = "windows")]
     command
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::parse_linux_manager_unit;
+
+    #[test]
+    fn only_treats_the_leaf_cgroup_as_the_managed_unit() {
+        let app_scope =
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.browser.scope\n";
+        let tunnel_service =
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/demo-tunnel.service\n";
+
+        assert_eq!(parse_linux_manager_unit(app_scope), None);
+        assert_eq!(
+            parse_linux_manager_unit(tunnel_service).as_deref(),
+            Some("demo-tunnel.service")
+        );
+    }
 }

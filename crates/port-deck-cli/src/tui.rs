@@ -7,7 +7,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use port_deck_cli::{Filters, StopTarget, TabTarget, TuiArgs, build_stop_plan, runtime_slug};
-use port_deck_core::{ProcessOrigin, ResourceGroup, ResourceKind, ServiceProcess};
+use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -294,7 +294,7 @@ impl App {
             .block(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .title(" PORT DECK / TERMINAL CONTROL "),
+                    .title(" STRAYD / TERMINAL CONTROL "),
             )
             .style(Style::default().fg(MUTED))
             .highlight_style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD))
@@ -564,9 +564,10 @@ fn route_line(group: &ResourceGroup) -> Line<'static> {
 }
 
 fn scope_label(service: &ServiceProcess) -> String {
-    match service.origin {
-        ProcessOrigin::Windows => "Windows".into(),
-        ProcessOrigin::Wsl => format!("WSL / {}", service.distribution.as_deref().unwrap_or("?")),
+    match service.platform {
+        HostPlatform::Windows => "Windows".into(),
+        HostPlatform::Linux => "Linux".into(),
+        HostPlatform::MacOs => "macOS".into(),
     }
 }
 

@@ -1,0 +1,81 @@
+name: Build npm package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  native:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: strayd-linux-x64
+            source: target/x86_64-unknown-linux-gnu/release/strayd
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: strayd-linux-arm64
+            source: target/aarch64-unknown-linux-gnu/release/strayd
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: strayd-win32-x64.exe
+            source: target/x86_64-pc-windows-msvc/release/strayd.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: strayd-win32-arm64.exe
+            source: target/aarch64-pc-windows-msvc/release/strayd.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: strayd-darwin-x64
+            source: target/x86_64-apple-darwin/release/strayd
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact: strayd-darwin-arm64
+            source: target/aarch64-apple-darwin/release/strayd
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo test --workspace
+      - run: cargo build --release -p port-deck-cli --target ${{ matrix.target }}
+      - name: Stage native binary
+        shell: bash
+        run: |
+          mkdir -p npm-native
+          cp "${{ matrix.source }}" "npm-native/${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.artifact }}
+          path: npm-native/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  package:
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/download-artifact@v5
+        with:
+          path: npm/strayd/native
+          merge-multiple: true
+      - run: chmod +x npm/strayd/native/strayd-linux-* npm/strayd/native/strayd-darwin-*
+      - run: mkdir -p dist/npm && cd npm/strayd && bun pm pack --destination ../../dist/npm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strayd-npm
+          path: dist/npm/*.tgz
+          if-no-files-found: error
