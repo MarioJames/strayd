@@ -51,25 +51,31 @@ npx strayd
 
 | 操作 | 键盘 | 鼠标 |
 | --- | --- | --- |
-| 切换分类 | `Tab`、`Shift+Tab`、`1-5` | 点击顶部完整分类区域 |
+| 切换分类 | `←/→`、`Tab`、`Shift+Tab`、`1-4` | 点击顶部完整分类区域 |
 | 选择资源组 | `↑/↓`、`j/k`、`Home/End` | 点击资源行或滚轮 |
 | 创建隐藏规则 | `h` | 点击 `HIDE` / `隐藏` |
 | 勾选规则字段 | `Space` | 点击字段行 |
-| 移除隐藏规则 | 在配置页按 `u` / `Delete` | 点击 `REMOVE` / `移除` |
-| 停止开发服务 | `d` | 点击 `SERVICE` |
-| 停止隧道 | `t` | 点击 `TUNNEL` |
-| 停止整个组 | `x` | 点击 `GROUP` |
-| 刷新 / 退出 | `r` / `q` | 点击 `REFRESH` / `QUIT` |
+| 打开 Settings | `,` | 点击 `SETTINGS` / `设置` |
+| 选择 / 移除隐藏规则 | `↑/↓`，`u` / `Delete` | 点击规则，再点击 `REMOVE RULE` / `移除规则` |
+| 停止当前范围 | `s` | 点击随分类变化的 `STOP…` / `停止…` |
+| 选择右侧文字 | `c`，再次按 `c` / `Esc` 返回 | 点击 `SELECT TEXT` / `选择文字` 后直接拖选 |
+| 刷新 / 退出 | `r` / `q` | — |
 | 确认 / 取消 | `Enter` / `Esc` | 点击确认框按钮 |
 
-终端启用鼠标捕获后，如需选择或复制文字，通常可以按住 `Shift` 再拖动鼠标。
+TUI 只保留一个停止入口，作用范围由当前分类明确决定：`全部` 停止整个关联组，`开发服务器` 只停止开发服务，`公网隧道` 只停止隧道，`系统服务` 只停止可终止的系统服务。确认框会再次显示实际类型和进程数量。CLI 仍保留 `dev`、`tunnel`、`system`、`group`、`resource` 等精细目标。
+
+进入“选择文字”后，Strayd 会暂时释放终端鼠标并暂停界面重绘，此时右侧详情可以像普通终端输出一样直接拖选复制；按 `c` 或 `Esc` 恢复点击操作。
 
 ## 持久化配置
 
-Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。进入顶部 `CONFIG` / `隐藏配置` 页可以查看并移除已有规则。修改会立即写入配置文件并刷新界面。
+Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。按 `,` 或点击底部 `Settings / 设置` 打开弹窗，即可查看并移除自己添加的规则。修改会立即写入配置文件并刷新界面。
 
 <p align="center">
   <img src="docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
 </p>
 
 也可以直接维护 TOML。先生成带注释的模板：
@@ -114,7 +120,7 @@ runtimes = ["sshd"]
 | `commands` | 完整命令行，忽略大小写的包含匹配 |
 | `ids` | Strayd 资源 ID，忽略大小写的精确匹配 |
 
-规则同时作用于 TUI、`list` 和 `stop`。临时绕过配置可使用 `--no-config`；此时 TUI 配置页为只读。指定其他文件可使用 `--config <PATH>`：
+规则同时作用于 TUI、`list` 和 `stop`。临时绕过配置可使用 `--no-config`；此时 Settings 弹窗为只读。指定其他文件可使用 `--config <PATH>`：
 
 ```bash
 strayd --no-config
@@ -148,6 +154,7 @@ strayd list --kind tunnel --json
 strayd list --platform linux --port 5000
 strayd stop tunnel --port 5000 --dry-run
 strayd stop tunnel --port 5000 --yes
+strayd stop system --port 8080 --yes
 strayd stop group --port 5000 --yes
 strayd stop dev --project storefront --all --yes
 ```

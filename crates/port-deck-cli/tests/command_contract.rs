@@ -106,6 +106,27 @@ fn bulk_resource_matches_require_an_explicit_all_flag() {
 }
 
 #[test]
+fn system_stop_does_not_terminate_linked_tunnels_or_development_servers() {
+    let groups = vec![ResourceGroup {
+        id: "group:mixed".into(),
+        primary_port: Some(22),
+        services: vec![
+            service(8100, ResourceKind::System, RuntimeKind::Other, 22),
+            service(8200, ResourceKind::Tunnel, RuntimeKind::Cloudflared, 22),
+            service(8300, ResourceKind::Development, RuntimeKind::Node, 22),
+        ],
+    }];
+
+    let plan = build_stop_plan(&groups, StopTarget::System, &Filters::default(), true)
+        .expect("the system service should match");
+
+    assert_eq!(
+        plan.iter().map(|service| service.pid).collect::<Vec<_>>(),
+        [8100]
+    );
+}
+
+#[test]
 fn visibility_rules_hide_only_matching_services_and_keep_related_tunnels() {
     let mut source = service(8100, ResourceKind::System, RuntimeKind::Sshd, 22);
     source.can_terminate = false;

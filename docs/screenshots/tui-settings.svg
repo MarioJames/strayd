@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Strayd Settings 隐藏规则管理</title>
+  <desc id="desc">Strayd 的 Settings 弹窗列出持久化隐藏规则，可查看匹配范围并移除用户添加的规则。</desc>
+  <rect width="1200" height="650" rx="24" fill="#070b12"/>
+  <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
+  <text x="46" y="37" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">STRAYD / 终端控制台</text>
+  <rect x="36" y="42" width="280" height="26" rx="5" fill="#3dd6d0" opacity="0.56"/>
+  <text x="176" y="61" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   全部</text>
+  <text x="456" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   开发服务器</text>
+  <text x="736" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   公网隧道</text>
+  <text x="1016" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   系统服务</text>
+
+  <rect x="24" y="92" width="430" height="474" rx="12" fill="#0b1019" stroke="#354050" opacity="0.48"/>
+  <rect x="470" y="92" width="706" height="474" rx="12" fill="#0b1019" stroke="#ab72ff" opacity="0.48"/>
+  <text x="48" y="126" fill="#758097" opacity="0.55" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">资源 / 4</text>
+  <text x="494" y="126" fill="#ab72ff" opacity="0.55" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">关联与进程详情</text>
+
+  <rect x="96" y="108" width="1008" height="438" rx="13" fill="#0f141f" stroke="#ab72ff" stroke-width="3"/>
+  <text x="600" y="143" text-anchor="middle" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">设置 / 隐藏规则</text>
+
+  <rect x="124" y="163" width="400" height="304" rx="9" fill="#0b1019" stroke="#354050"/>
+  <text x="148" y="193" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">隐藏规则 / 2</text>
+  <rect x="140" y="211" width="368" height="78" rx="7" fill="#19283a"/>
+  <rect x="140" y="211" width="5" height="78" rx="2" fill="#3dd6d0"/>
+  <text x="160" y="243" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700">#1  端口: 22</text>
+  <text x="160" y="271" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">运行时: sshd · 平台: linux</text>
+  <text x="160" y="329" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">#2  端口: 5432</text>
+  <text x="160" y="357" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">进程名: postgres</text>
+
+  <rect x="536" y="163" width="540" height="304" rx="9" fill="#0b1019" stroke="#ab72ff"/>
+  <text x="560" y="193" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">规则范围与配置文件</text>
+  <text x="560" y="232" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">配置文件：~/.config/strayd/config.toml</text>
+  <text x="560" y="276" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">已填写字段必须同时匹配：</text>
+  <text x="578" y="314" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">端口: 22</text>
+  <text x="578" y="346" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">运行时: sshd</text>
+  <text x="578" y="378" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">平台: linux</text>
+  <text x="560" y="430" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">按 u/Delete 或点击“移除规则”即可删除。</text>
+
+  <rect x="300" y="487" width="250" height="36" rx="5" fill="#ff657c"/>
+  <text x="425" y="511" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">u / DEL  移除规则</text>
+  <rect x="650" y="487" width="250" height="36" rx="5" fill="#758097"/>
+  <text x="775" y="511" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">ESC  关闭</text>
+
+  <rect x="24" y="586" width="180" height="34" rx="5" fill="#3dd6d0" opacity="0.55"/><text x="42" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h     隐藏</text>
+  <rect x="214" y="586" width="180" height="34" rx="5" fill="#ff657c" opacity="0.55"/><text x="232" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">s     停止整组</text>
+  <rect x="404" y="586" width="180" height="34" rx="5" fill="#3dd6d0"/><text x="422" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">,     设置</text>
+  <rect x="594" y="586" width="180" height="34" rx="5" fill="#3dd6d0" opacity="0.55"/><text x="612" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">c     选择文字</text>
+  <text x="28" y="642" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">已打开设置 · 上下键选择规则 · u/Delete 移除</text>
+</svg>

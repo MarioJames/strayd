@@ -53,7 +53,7 @@ pub enum Command {
     Tui(TuiArgs),
     /// List detected resources
     List(ListArgs),
-    /// Stop development services, tunnels, groups, or individual resources
+    /// Stop development servers, tunnels, system services, linked groups, or matched resources
     Stop(StopArgs),
     /// Inspect or initialize persistent configuration
     Config(ConfigArgs),
@@ -546,7 +546,6 @@ pub enum TabTarget {
     Dev,
     Tunnels,
     System,
-    Config,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -597,6 +596,7 @@ pub struct StopArgs {
 pub enum StopTarget {
     Dev,
     Tunnel,
+    System,
     Group,
     Resource,
 }
@@ -786,6 +786,9 @@ fn target_matches_service(target: StopTarget, service: &ServiceProcess) -> bool 
     match target {
         StopTarget::Dev => service.resource_kind == ResourceKind::Development,
         StopTarget::Tunnel => service.resource_kind == ResourceKind::Tunnel,
+        StopTarget::System => {
+            service.resource_kind == ResourceKind::System && service.can_terminate
+        }
         StopTarget::Resource => service.can_terminate,
         StopTarget::Group => false,
     }

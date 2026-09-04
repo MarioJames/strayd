@@ -95,6 +95,10 @@ struct App {
     regions: UiRegions,
     pending: Option<PendingStop>,
     pending_hide: Option<PendingHide>,
+    settings_open: bool,
+    settings_selected: usize,
+    settings_list_offset: usize,
+    text_selection_mode: bool,
     status: String,
     refresh_every: Option<Duration>,
     last_refresh: Instant,
@@ -105,17 +109,25 @@ struct App {
 enum MouseAction {
     SetTab(TabTarget),
     Select(usize),
-    StopDev,
-    StopTunnel,
-    StopGroup,
+    SelectSetting(usize),
+    Stop,
     Hide,
+    OpenSettings,
+    CloseSettings,
+    SelectText,
     RemoveRule,
-    Refresh,
-    Quit,
     Confirm,
     Cancel,
     ToggleHideField(usize),
     SaveHide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavigationAction {
+    NextTab,
+    PreviousTab,
+    NextItem,
+    PreviousItem,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +140,12 @@ struct UiRegions {
     hide_fields: Vec<Rect>,
     hide_save: Rect,
     hide_cancel: Rect,
+    settings_list: Rect,
+    settings_list_panel: Rect,
+    settings_detail_panel: Rect,
+    settings_popup: Rect,
+    settings_remove: Rect,
+    settings_close: Rect,
 }
 
 struct PendingStop {
@@ -169,6 +187,10 @@ impl App {
             regions: UiRegions::new(Rect::default(), args.tab, 0),
             pending: None,
             pending_hide: None,
+            settings_open: false,
+            settings_selected: 0,
+            settings_list_offset: 0,
+            text_selection_mode: false,
             status,
             refresh_every: (args.refresh > 0).then(|| Duration::from_secs(args.refresh)),
             last_refresh: Instant::now(),
@@ -178,22 +200,41 @@ impl App {
 
     fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), String> {
         while !self.should_quit {
-            terminal.draw(|frame| self.draw(frame)).map_err(|error| {
-                self.tr
-                    .format("tui_render_error", &[("error", error.to_string())])
-            })?;
+            if !self.text_selection_mode {
+                terminal.draw(|frame| self.draw(frame)).map_err(|error| {
+                    self.tr
+                        .format("tui_render_error", &[("error", error.to_string())])
+                })?;
+            }
 
             if event::poll(Duration::from_millis(200)).map_err(|error| {
                 self.tr
                     .format("tui_event_error", &[("error", error.to_string())])
             })? {
-                match event::read().map_err(|error| {
+                let input = event::read().map_err(|error| {
                     self.tr
                         .format("tui_event_error", &[("error", error.to_string())])
-                })? {
+                })?;
+                let was_selecting_text = self.text_selection_mode;
+                match input {
                     Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
                     Event::Mouse(mouse) => self.handle_mouse(mouse),
                     _ => {}
+                }
+                if !was_selecting_text && self.text_selection_mode {
+                    terminal.draw(|frame| self.draw(frame)).map_err(|error| {
+                        self.tr
+                            .format("tui_render_error", &[("error", error.to_string())])
+                    })?;
+                    execute!(terminal.backend_mut(), DisableMouseCapture).map_err(|error| {
+                        self.tr
+                            .format("tui_mouse_mode_error", &[("error", error.to_string())])
+                    })?;
+                } else if was_selecting_text && !self.text_selection_mode {
+                    execute!(terminal.backend_mut(), EnableMouseCapture).map_err(|error| {
+                        self.tr
+                            .format("tui_mouse_mode_error", &[("error", error.to_string())])
+                    })?;
                 }
             }
             if self
@@ -201,6 +242,8 @@ impl App {
                 .is_some_and(|interval| self.last_refresh.elapsed() >= interval)
                 && self.pending.is_none()
                 && self.pending_hide.is_none()
+                && !self.settings_open
+                && !self.text_selection_mode
             {
                 self.refresh();
             }
@@ -209,6 +252,15 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.text_selection_mode {
+            if is_quit_key(key) {
+                self.should_quit = true;
+            } else if text_selection_transition(true, key.code) == Some(false) {
+                self.text_selection_mode = false;
+                self.status = self.tr.text("tui_text_selection_closed").into();
+            }
+            return;
+        }
         if self.pending_hide.is_some() {
             match key.code {
                 KeyCode::Down | KeyCode::Char('j') => self.select_next_hide_field(),
@@ -234,36 +286,47 @@ impl App {
             }
             return;
         }
+        if self.settings_open {
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => self.select_next_setting(),
+                KeyCode::Up | KeyCode::Char('k') => self.select_previous_setting(),
+                KeyCode::Char('u') | KeyCode::Delete => self.remove_selected_rule(),
+                KeyCode::Esc | KeyCode::Char(',') | KeyCode::Char('q') => {
+                    self.settings_open = false;
+                    self.status = self.tr.text("tui_settings_closed").into();
+                }
+                _ => {}
+            }
+            return;
+        }
 
         if is_quit_key(key) {
             self.should_quit = true;
             return;
         }
 
+        if let Some(action) = navigation_action(key.code) {
+            match action {
+                NavigationAction::NextTab => self.next_tab(),
+                NavigationAction::PreviousTab => self.previous_tab(),
+                NavigationAction::NextItem => self.select_next(),
+                NavigationAction::PreviousItem => self.select_previous(),
+            }
+            return;
+        }
+
         match key.code {
-            KeyCode::Tab => self.next_tab(),
-            KeyCode::BackTab => self.previous_tab(),
             KeyCode::Char('1') => self.set_tab(TabTarget::All),
             KeyCode::Char('2') => self.set_tab(TabTarget::Dev),
             KeyCode::Char('3') => self.set_tab(TabTarget::Tunnels),
             KeyCode::Char('4') => self.set_tab(TabTarget::System),
-            KeyCode::Char('5') => self.set_tab(TabTarget::Config),
-            KeyCode::Down | KeyCode::Char('j') => self.select_next(),
-            KeyCode::Up | KeyCode::Char('k') => self.select_previous(),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.select_last(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('h') if self.tab != TabTarget::Config => self.prepare_hide(),
-            KeyCode::Char('u') | KeyCode::Delete if self.tab == TabTarget::Config => {
-                self.remove_selected_rule()
-            }
-            KeyCode::Char('d') => self.prepare_stop(StopTarget::Dev, self.tr.text("tui_stop_dev")),
-            KeyCode::Char('t') => {
-                self.prepare_stop(StopTarget::Tunnel, self.tr.text("tui_stop_tunnel"))
-            }
-            KeyCode::Char('x') => {
-                self.prepare_stop(StopTarget::Group, self.tr.text("tui_stop_group"))
-            }
+            KeyCode::Char('h') => self.prepare_hide(),
+            KeyCode::Char('s') => self.prepare_contextual_stop(),
+            KeyCode::Char(',') => self.open_settings(),
+            KeyCode::Char('c') => self.open_text_selection(),
             _ => {}
         }
     }
@@ -271,23 +334,37 @@ impl App {
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
             MouseEventKind::ScrollDown if self.pending.is_none() && self.pending_hide.is_none() => {
-                self.select_next()
+                if self.settings_open {
+                    self.select_next_setting();
+                } else {
+                    self.select_next();
+                }
             }
             MouseEventKind::ScrollUp if self.pending.is_none() && self.pending_hide.is_none() => {
-                self.select_previous()
+                if self.settings_open {
+                    self.select_previous_setting();
+                } else {
+                    self.select_previous();
+                }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let visible_len = if self.tab == TabTarget::Config {
+                let visible_len = if self.settings_open {
                     self.config.display.hide.len()
                 } else {
                     self.visible_group_indices().len()
                 };
+                let list_offset = if self.settings_open {
+                    self.settings_list_offset
+                } else {
+                    self.list_offset
+                };
                 if let Some(action) = self.regions.action_at(
                     mouse,
-                    self.list_offset,
+                    list_offset,
                     visible_len,
                     self.pending.is_some(),
                     self.pending_hide.is_some(),
+                    self.settings_open,
                 ) {
                     self.handle_mouse_action(action);
                 }
@@ -300,19 +377,16 @@ impl App {
         match action {
             MouseAction::SetTab(tab) => self.set_tab(tab),
             MouseAction::Select(index) => self.selected = index,
-            MouseAction::StopDev => {
-                self.prepare_stop(StopTarget::Dev, self.tr.text("tui_stop_dev"))
-            }
-            MouseAction::StopTunnel => {
-                self.prepare_stop(StopTarget::Tunnel, self.tr.text("tui_stop_tunnel"))
-            }
-            MouseAction::StopGroup => {
-                self.prepare_stop(StopTarget::Group, self.tr.text("tui_stop_group"))
-            }
+            MouseAction::SelectSetting(index) => self.settings_selected = index,
+            MouseAction::Stop => self.prepare_contextual_stop(),
             MouseAction::Hide => self.prepare_hide(),
+            MouseAction::OpenSettings => self.open_settings(),
+            MouseAction::CloseSettings => {
+                self.settings_open = false;
+                self.status = self.tr.text("tui_settings_closed").into();
+            }
+            MouseAction::SelectText => self.open_text_selection(),
             MouseAction::RemoveRule => self.remove_selected_rule(),
-            MouseAction::Refresh => self.refresh(),
-            MouseAction::Quit => self.should_quit = true,
             MouseAction::Confirm => self.confirm_pending(),
             MouseAction::Cancel => {
                 self.pending = None;
@@ -325,15 +399,10 @@ impl App {
     }
 
     fn refresh(&mut self) {
-        let config_selection = (self.tab == TabTarget::Config).then_some(self.selected);
         let selected_id = self.selected_group().map(|group| group.id.clone());
         (self.snapshot, self.hidden_count) = scan_visible(&self.config);
         self.last_refresh = Instant::now();
         self.status = scan_status(&self.snapshot, self.hidden_count, self.tr);
-        if let Some(selected) = config_selection {
-            self.selected = selected.min(self.config.display.hide.len().saturating_sub(1));
-            return;
-        }
         let visible = self.visible_group_indices();
         self.selected = selected_id
             .and_then(|id| {
@@ -345,10 +414,6 @@ impl App {
     }
 
     fn prepare_stop(&mut self, target: StopTarget, label: &str) {
-        if self.tab == TabTarget::Config {
-            self.status = self.tr.text("tui_no_actionable_resource").into();
-            return;
-        }
         let Some(group) = self.selected_group().cloned() else {
             self.status = self.tr.text("tui_no_actionable_resource").into();
             return;
@@ -362,6 +427,26 @@ impl App {
             }
             Err(error) => self.status = self.tr.plan_error(&error),
         }
+    }
+
+    fn prepare_contextual_stop(&mut self) {
+        let target = stop_target_for_tab(self.tab);
+        let label = self.tr.text(stop_label_key(self.tab));
+        self.prepare_stop(target, label);
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_selected = self
+            .settings_selected
+            .min(self.config.display.hide.len().saturating_sub(1));
+        self.settings_list_offset = 0;
+        self.settings_open = true;
+        self.status = self.tr.text("tui_settings_opened").into();
+    }
+
+    fn open_text_selection(&mut self) {
+        self.text_selection_mode = true;
+        self.status = self.tr.text("tui_text_selection_opened").into();
     }
 
     fn prepare_hide(&mut self) {
@@ -452,21 +537,26 @@ impl App {
             self.status = self.tr.text("tui_hide_disabled").into();
             return;
         };
-        if self.config.display.hide.is_empty() || self.selected >= self.config.display.hide.len() {
+        if self.config.display.hide.is_empty()
+            || self.settings_selected >= self.config.display.hide.len()
+        {
             self.status = self.tr.text("tui_no_rule_selected").into();
             return;
         }
-        let removed = self.config.display.hide.remove(self.selected);
+        let removed = self.config.display.hide.remove(self.settings_selected);
         if let Err(error) = save_config(&path, &self.config) {
-            self.config.display.hide.insert(self.selected, removed);
+            self.config
+                .display
+                .hide
+                .insert(self.settings_selected, removed);
             self.status = self.tr.format(
                 "tui_remove_failed",
                 &[("error", self.tr.config_error(&error))],
             );
             return;
         }
-        self.selected = self
-            .selected
+        self.settings_selected = self
+            .settings_selected
             .min(self.config.display.hide.len().saturating_sub(1));
         self.refresh();
         self.status = self
@@ -505,25 +595,13 @@ impl App {
     }
 
     fn next_tab(&mut self) {
-        self.tab = match self.tab {
-            TabTarget::All => TabTarget::Dev,
-            TabTarget::Dev => TabTarget::Tunnels,
-            TabTarget::Tunnels => TabTarget::System,
-            TabTarget::System => TabTarget::Config,
-            TabTarget::Config => TabTarget::All,
-        };
+        self.tab = next_tab_target(self.tab);
         self.selected = 0;
         self.list_offset = 0;
     }
 
     fn previous_tab(&mut self) {
-        self.tab = match self.tab {
-            TabTarget::All => TabTarget::Config,
-            TabTarget::Dev => TabTarget::All,
-            TabTarget::Tunnels => TabTarget::Dev,
-            TabTarget::System => TabTarget::Tunnels,
-            TabTarget::Config => TabTarget::System,
-        };
+        self.tab = previous_tab_target(self.tab);
         self.selected = 0;
         self.list_offset = 0;
     }
@@ -550,11 +628,18 @@ impl App {
     }
 
     fn selectable_len(&self) -> usize {
-        if self.tab == TabTarget::Config {
-            self.config.display.hide.len()
-        } else {
-            self.visible_group_indices().len()
+        self.visible_group_indices().len()
+    }
+
+    fn select_next_setting(&mut self) {
+        if !self.config.display.hide.is_empty() {
+            self.settings_selected =
+                (self.settings_selected + 1).min(self.config.display.hide.len().saturating_sub(1));
         }
+    }
+
+    fn select_previous_setting(&mut self) {
+        self.settings_selected = self.settings_selected.saturating_sub(1);
     }
 
     fn visible_group_indices(&self) -> Vec<usize> {
@@ -598,6 +683,9 @@ impl App {
         if let Some(pending) = &self.pending_hide {
             self.draw_hide_editor(frame, area, pending);
         }
+        if self.settings_open {
+            self.draw_settings(frame);
+        }
     }
 
     fn draw_tabs(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -612,7 +700,6 @@ impl App {
             self.tr.text("tui_tab_dev"),
             self.tr.text("tui_tab_tunnels"),
             self.tr.text("tui_tab_system"),
-            self.tr.text("tui_tab_config"),
         ];
         for ((tab_area, tab), label) in self.regions.tabs.iter().zip(labels) {
             let selected = *tab == self.tab;
@@ -633,10 +720,6 @@ impl App {
     }
 
     fn draw_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        if self.tab == TabTarget::Config {
-            self.draw_config_content(frame, area);
-            return;
-        }
         let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
             .split(area);
         let visible = self.visible_group_indices();
@@ -682,9 +765,15 @@ impl App {
         frame.render_widget(detail, columns[1]);
     }
 
-    fn draw_config_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
-            .split(area);
+    fn draw_settings(&mut self, frame: &mut ratatui::Frame) {
+        frame.render_widget(Clear, self.regions.settings_popup);
+        frame.render_widget(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(self.tr.text("tui_settings_title"))
+                .border_style(Style::default().fg(PURPLE)),
+            self.regions.settings_popup,
+        );
         let items = self
             .config
             .display
@@ -712,28 +801,40 @@ impl App {
             );
         let has_rules = !self.config.display.hide.is_empty();
         let mut state = ListState::default()
-            .with_selected(has_rules.then_some(self.selected))
-            .with_offset(self.list_offset);
-        frame.render_stateful_widget(list, columns[0], &mut state);
-        self.list_offset = state.offset();
+            .with_selected(has_rules.then_some(self.settings_selected))
+            .with_offset(self.settings_list_offset);
+        frame.render_stateful_widget(list, self.regions.settings_list_panel, &mut state);
+        self.settings_list_offset = state.offset();
 
         let detail = self
             .config
             .display
             .hide
-            .get(self.selected)
+            .get(self.settings_selected)
             .map(|rule| rule_detail(rule, self.tr, self.config_path.as_deref()))
             .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_rules")));
         frame.render_widget(
             Paragraph::new(detail)
                 .block(
                     Block::bordered()
-                        .title(self.tr.text("tui_config_detail_title"))
+                        .title(self.tr.text("tui_settings_detail_title"))
                         .border_style(Style::default().fg(PURPLE))
                         .padding(Padding::horizontal(1)),
                 )
                 .wrap(Wrap { trim: false }),
-            columns[1],
+            self.regions.settings_detail_panel,
+        );
+        frame.render_widget(
+            Paragraph::new(self.tr.text("tui_settings_remove_button"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(DANGER).bold()),
+            self.regions.settings_remove,
+        );
+        frame.render_widget(
+            Paragraph::new(self.tr.text("tui_settings_close_button"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(MUTED).bold()),
+            self.regions.settings_close,
         );
     }
 
@@ -742,7 +843,7 @@ impl App {
         let actions = footer_actions(self.tab);
         let action_areas = footer_action_areas(action_row, actions.len());
         for ((area, action), _) in action_areas.iter().zip(&actions).zip(0..) {
-            let (label, key_label, danger) = action_label(*action, self.tr);
+            let (label, key_label, danger) = action_label(*action, self.tab, self.tr);
             let color = if danger { DANGER } else { CYAN };
             let button = Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -915,13 +1016,12 @@ impl UiRegions {
             tabs_area.width.saturating_sub(2),
             1,
         );
-        let tab_areas = Layout::horizontal([Constraint::Ratio(1, 5); 5]).split(tab_row);
+        let tab_areas = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(tab_row);
         let tabs = [
             TabTarget::All,
             TabTarget::Dev,
             TabTarget::Tunnels,
             TabTarget::System,
-            TabTarget::Config,
         ]
         .into_iter()
         .enumerate()
@@ -960,6 +1060,31 @@ impl UiRegions {
             19,
             1,
         );
+        let settings_popup = settings_popup_rect(area);
+        let settings_inner = Rect::new(
+            settings_popup.x.saturating_add(2),
+            settings_popup.y.saturating_add(2),
+            settings_popup.width.saturating_sub(4),
+            settings_popup.height.saturating_sub(4),
+        );
+        let [settings_content, settings_buttons] =
+            Layout::vertical([Constraint::Min(6), Constraint::Length(2)]).areas(settings_inner);
+        let [settings_list_panel, settings_detail_panel] =
+            Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
+                .areas(settings_content);
+        let settings_list = Rect::new(
+            settings_list_panel.x.saturating_add(2),
+            settings_list_panel.y.saturating_add(1),
+            settings_list_panel.width.saturating_sub(4),
+            settings_list_panel.height.saturating_sub(2),
+        );
+        let [settings_remove, _, settings_close] = Layout::horizontal([
+            Constraint::Length(22),
+            Constraint::Length(2),
+            Constraint::Length(22),
+        ])
+        .flex(Flex::Center)
+        .areas(settings_buttons);
         Self {
             tabs,
             list,
@@ -969,6 +1094,12 @@ impl UiRegions {
             hide_fields,
             hide_save,
             hide_cancel,
+            settings_list,
+            settings_list_panel,
+            settings_detail_panel,
+            settings_popup,
+            settings_remove,
+            settings_close,
         }
     }
 
@@ -979,6 +1110,7 @@ impl UiRegions {
         visible_len: usize,
         confirmation_open: bool,
         hide_open: bool,
+        settings_open: bool,
     ) -> Option<MouseAction> {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return None;
@@ -1006,6 +1138,19 @@ impl UiRegions {
                         .then_some(MouseAction::Cancel)
                 });
         }
+        if settings_open {
+            if rect_contains(self.settings_list, mouse.column, mouse.row) {
+                let item =
+                    list_offset + usize::from(mouse.row.saturating_sub(self.settings_list.y) / 2);
+                return (item < visible_len).then_some(MouseAction::SelectSetting(item));
+            }
+            return rect_contains(self.settings_remove, mouse.column, mouse.row)
+                .then_some(MouseAction::RemoveRule)
+                .or_else(|| {
+                    rect_contains(self.settings_close, mouse.column, mouse.row)
+                        .then_some(MouseAction::CloseSettings)
+                });
+        }
         if let Some((_, tab)) = self
             .tabs
             .iter()
@@ -1024,23 +1169,13 @@ impl UiRegions {
     }
 }
 
-fn footer_actions(tab: TabTarget) -> Vec<MouseAction> {
-    if tab == TabTarget::Config {
-        vec![
-            MouseAction::RemoveRule,
-            MouseAction::Refresh,
-            MouseAction::Quit,
-        ]
-    } else {
-        vec![
-            MouseAction::Hide,
-            MouseAction::StopDev,
-            MouseAction::StopTunnel,
-            MouseAction::StopGroup,
-            MouseAction::Refresh,
-            MouseAction::Quit,
-        ]
-    }
+fn footer_actions(_tab: TabTarget) -> Vec<MouseAction> {
+    vec![
+        MouseAction::Hide,
+        MouseAction::Stop,
+        MouseAction::OpenSettings,
+        MouseAction::SelectText,
+    ]
 }
 
 fn footer_action_areas(area: Rect, count: usize) -> Vec<Rect> {
@@ -1075,23 +1210,25 @@ fn footer_button_width(area: Rect, count: usize) -> u16 {
     if count == 0 {
         return 0;
     }
-    let full_width = (count as u16).saturating_mul(14);
+    let full_width = (count as u16).saturating_mul(20);
     if area.width >= full_width.saturating_add(16) {
-        14
+        20
     } else {
-        (area.width / count as u16).min(14)
+        (area.width / count as u16).min(20)
     }
 }
 
-fn action_label(action: MouseAction, tr: Translator) -> (&'static str, &'static str, bool) {
+fn action_label(
+    action: MouseAction,
+    tab: TabTarget,
+    tr: Translator,
+) -> (&'static str, &'static str, bool) {
     match action {
         MouseAction::Hide => (tr.text("tui_action_hide"), "h", false),
         MouseAction::RemoveRule => (tr.text("tui_action_remove"), "u", true),
-        MouseAction::StopDev => (tr.text("tui_action_service"), "d", true),
-        MouseAction::StopTunnel => (tr.text("tui_action_tunnel"), "t", true),
-        MouseAction::StopGroup => (tr.text("tui_action_group"), "x", true),
-        MouseAction::Refresh => (tr.text("tui_action_refresh"), "r", false),
-        MouseAction::Quit => (tr.text("tui_action_quit"), "q", false),
+        MouseAction::Stop => (tr.text(stop_action_label_key(tab)), "s", true),
+        MouseAction::OpenSettings => (tr.text("tui_action_settings"), ",", false),
+        MouseAction::SelectText => (tr.text("tui_action_select_text"), "c", false),
         _ => ("", "", false),
     }
 }
@@ -1130,7 +1267,6 @@ fn tab_matches(tab: TabTarget, group: &ResourceGroup) -> bool {
             .services
             .iter()
             .any(|service| service.resource_kind == ResourceKind::System),
-        TabTarget::Config => false,
     }
 }
 
@@ -1190,7 +1326,7 @@ fn service_for_hide(group: &ResourceGroup, tab: TabTarget) -> Option<&ServicePro
         TabTarget::Dev => Some(ResourceKind::Development),
         TabTarget::Tunnels => Some(ResourceKind::Tunnel),
         TabTarget::System => Some(ResourceKind::System),
-        TabTarget::All | TabTarget::Config => None,
+        TabTarget::All => None,
     };
     kind.and_then(|kind| {
         group
@@ -1259,6 +1395,11 @@ fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) 
         Line::from(""),
     ];
     lines.extend(rule_parts(rule, tr).into_iter().map(Line::from));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        tr.text("tui_rule_remove_hint"),
+        Style::default().fg(MUTED),
+    )));
     Text::from(lines)
 }
 
@@ -1547,6 +1688,73 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     horizontal
 }
 
+fn settings_popup_rect(area: Rect) -> Rect {
+    centered_rect(84, area.height.saturating_sub(6).clamp(10, 20), area)
+}
+
+fn navigation_action(key: KeyCode) -> Option<NavigationAction> {
+    match key {
+        KeyCode::Right | KeyCode::Tab => Some(NavigationAction::NextTab),
+        KeyCode::Left | KeyCode::BackTab => Some(NavigationAction::PreviousTab),
+        KeyCode::Down | KeyCode::Char('j') => Some(NavigationAction::NextItem),
+        KeyCode::Up | KeyCode::Char('k') => Some(NavigationAction::PreviousItem),
+        _ => None,
+    }
+}
+
+fn next_tab_target(tab: TabTarget) -> TabTarget {
+    match tab {
+        TabTarget::All => TabTarget::Dev,
+        TabTarget::Dev => TabTarget::Tunnels,
+        TabTarget::Tunnels => TabTarget::System,
+        TabTarget::System => TabTarget::All,
+    }
+}
+
+fn previous_tab_target(tab: TabTarget) -> TabTarget {
+    match tab {
+        TabTarget::All => TabTarget::System,
+        TabTarget::Dev => TabTarget::All,
+        TabTarget::Tunnels => TabTarget::Dev,
+        TabTarget::System => TabTarget::Tunnels,
+    }
+}
+
+fn stop_target_for_tab(tab: TabTarget) -> StopTarget {
+    match tab {
+        TabTarget::All => StopTarget::Group,
+        TabTarget::Dev => StopTarget::Dev,
+        TabTarget::Tunnels => StopTarget::Tunnel,
+        TabTarget::System => StopTarget::System,
+    }
+}
+
+fn stop_label_key(tab: TabTarget) -> &'static str {
+    match tab {
+        TabTarget::All => "tui_stop_group",
+        TabTarget::Dev => "tui_stop_dev",
+        TabTarget::Tunnels => "tui_stop_tunnel",
+        TabTarget::System => "tui_stop_system",
+    }
+}
+
+fn stop_action_label_key(tab: TabTarget) -> &'static str {
+    match tab {
+        TabTarget::All => "tui_action_stop_group",
+        TabTarget::Dev => "tui_action_stop_dev",
+        TabTarget::Tunnels => "tui_action_stop_tunnel",
+        TabTarget::System => "tui_action_stop_service",
+    }
+}
+
+fn text_selection_transition(active: bool, key: KeyCode) -> Option<bool> {
+    match (active, key) {
+        (false, KeyCode::Char('c')) => Some(true),
+        (true, KeyCode::Char('c') | KeyCode::Esc) => Some(false),
+        _ => None,
+    }
+}
+
 fn is_quit_key(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('q')
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -1559,8 +1767,11 @@ mod tests {
     };
     use ratatui::layout::Rect;
 
-    use super::{MouseAction, UiRegions, is_quit_key};
-    use port_deck_cli::TabTarget;
+    use super::{
+        MouseAction, NavigationAction, UiRegions, footer_actions, is_quit_key, navigation_action,
+        next_tab_target, previous_tab_target, stop_target_for_tab, text_selection_transition,
+    };
+    use port_deck_cli::{StopTarget, TabTarget};
 
     #[test]
     fn plain_q_and_control_c_are_quit_keys() {
@@ -1579,28 +1790,81 @@ mod tests {
     }
 
     #[test]
+    fn arrow_keys_navigate_tabs_and_content() {
+        assert_eq!(
+            navigation_action(KeyCode::Right),
+            Some(NavigationAction::NextTab)
+        );
+        assert_eq!(
+            navigation_action(KeyCode::Left),
+            Some(NavigationAction::PreviousTab)
+        );
+        assert_eq!(
+            navigation_action(KeyCode::Down),
+            Some(NavigationAction::NextItem)
+        );
+        assert_eq!(
+            navigation_action(KeyCode::Up),
+            Some(NavigationAction::PreviousItem)
+        );
+        assert_eq!(next_tab_target(TabTarget::System), TabTarget::All);
+        assert_eq!(previous_tab_target(TabTarget::All), TabTarget::System);
+    }
+
+    #[test]
+    fn text_selection_mode_has_an_explicit_keyboard_toggle() {
+        assert_eq!(
+            text_selection_transition(false, KeyCode::Char('c')),
+            Some(true)
+        );
+        assert_eq!(
+            text_selection_transition(true, KeyCode::Char('c')),
+            Some(false)
+        );
+        assert_eq!(text_selection_transition(true, KeyCode::Esc), Some(false));
+        assert_eq!(text_selection_transition(false, KeyCode::Esc), None);
+    }
+
+    #[test]
+    fn each_resource_tab_exposes_one_contextual_stop_action() {
+        assert_eq!(stop_target_for_tab(TabTarget::All), StopTarget::Group);
+        assert_eq!(stop_target_for_tab(TabTarget::Dev), StopTarget::Dev);
+        assert_eq!(stop_target_for_tab(TabTarget::Tunnels), StopTarget::Tunnel);
+        assert_eq!(stop_target_for_tab(TabTarget::System), StopTarget::System);
+        assert_eq!(
+            footer_actions(TabTarget::All),
+            vec![
+                MouseAction::Hide,
+                MouseAction::Stop,
+                MouseAction::OpenSettings,
+                MouseAction::SelectText,
+            ]
+        );
+    }
+
+    #[test]
     fn mouse_clicks_map_to_tabs_rows_and_footer_actions() {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(3, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(3, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(50, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(50, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(8, 8), 2, 8, false, false),
+            regions.action_at(mouse_down(8, 8), 2, 8, false, false, false),
             Some(MouseAction::Select(4))
         );
         assert_eq!(
-            regions.action_at(mouse_down(30, 28), 0, 8, false, false),
-            Some(MouseAction::StopTunnel)
+            regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
+            Some(MouseAction::Stop)
         );
         assert_eq!(
-            regions.action_at(mouse_down(75, 28), 0, 8, false, false),
-            Some(MouseAction::Quit)
+            regions.action_at(mouse_down(75, 28), 0, 8, false, false, false),
+            Some(MouseAction::SelectText)
         );
     }
 
@@ -1609,24 +1873,24 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(18, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(18, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(38, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(38, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Dev))
         );
         assert_eq!(
-            regions.action_at(mouse_down(58, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(58, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(78, 1), 0, 8, false, false),
+            regions.action_at(mouse_down(78, 1), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::System))
         );
         assert_eq!(
-            regions.action_at(mouse_down(96, 1), 0, 8, false, false),
-            Some(MouseAction::SetTab(TabTarget::Config))
+            regions.action_at(mouse_down(96, 1), 0, 8, false, false, false),
+            Some(MouseAction::SetTab(TabTarget::System))
         );
     }
 
@@ -1635,14 +1899,17 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(38, 17), 0, 8, true, false),
+            regions.action_at(mouse_down(38, 17), 0, 8, true, false, false),
             Some(MouseAction::Confirm)
         );
         assert_eq!(
-            regions.action_at(mouse_down(57, 17), 0, 8, true, false),
+            regions.action_at(mouse_down(57, 17), 0, 8, true, false, false),
             Some(MouseAction::Cancel)
         );
-        assert_eq!(regions.action_at(mouse_down(3, 1), 0, 8, true, false), None);
+        assert_eq!(
+            regions.action_at(mouse_down(3, 1), 0, 8, true, false, false),
+            None
+        );
     }
 
     #[test]
@@ -1650,16 +1917,34 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 8);
 
         assert_eq!(
-            regions.action_at(mouse_down(20, 11), 0, 8, false, true),
+            regions.action_at(mouse_down(20, 11), 0, 8, false, true, false),
             Some(MouseAction::ToggleHideField(0))
         );
         assert_eq!(
-            regions.action_at(mouse_down(70, 22), 0, 8, false, true),
+            regions.action_at(mouse_down(70, 22), 0, 8, false, true, false),
             Some(MouseAction::SaveHide)
         );
         assert_eq!(
-            regions.action_at(mouse_down(20, 22), 0, 8, false, true),
+            regions.action_at(mouse_down(20, 22), 0, 8, false, true, false),
             Some(MouseAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn settings_dialog_rules_and_buttons_are_clickable() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
+
+        assert_eq!(
+            regions.action_at(mouse_down(15, 10), 0, 3, false, false, true),
+            Some(MouseAction::SelectSetting(1))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(30, 21), 0, 3, false, false, true),
+            Some(MouseAction::RemoveRule)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(55, 21), 0, 3, false, false, true),
+            Some(MouseAction::CloseSettings)
         );
     }
 
