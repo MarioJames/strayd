@@ -43,8 +43,10 @@ const DANGER: Color = Color::Rgb(255, 101, 124);
 const GROUP_ITEM_HEIGHT: u16 = 3;
 const RULE_ITEM_HEIGHT: u16 = 3;
 const TAB_HEIGHT: u16 = 3;
-const FOOTER_HEIGHT: u16 = 4;
-const FOOTER_ACTION_HEIGHT: u16 = 3;
+const FOOTER_HEIGHT: u16 = 2;
+const FOOTER_ACTION_HEIGHT: u16 = 1;
+const MAIN_PANEL_TOP_PADDING: u16 = 1;
+const MAIN_PANEL_PADDING: Padding = Padding::new(1, 1, MAIN_PANEL_TOP_PADDING, 0);
 
 pub fn run(
     args: TuiArgs,
@@ -777,7 +779,7 @@ impl App {
                     )))
                     .border_style(Style::default().fg(BORDER))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
-                    .padding(Padding::horizontal(1)),
+                    .padding(MAIN_PANEL_PADDING),
             )
             .style(Style::default().fg(TEXT).bg(SURFACE))
             .highlight_symbol("▌ ")
@@ -800,7 +802,7 @@ impl App {
                 text: Text::from(self.tr.text("tui_empty_tab")),
                 commands: Vec::new(),
             });
-        let content_height = columns[1].height.saturating_sub(2);
+        let content_height = columns[1].height.saturating_sub(2 + MAIN_PANEL_TOP_PADDING);
         let copy_x = columns[1]
             .x
             .saturating_add(columns[1].width.saturating_sub(3));
@@ -812,7 +814,9 @@ impl App {
                 (
                     Rect::new(
                         copy_x,
-                        columns[1].y.saturating_add(row.saturating_add(1)),
+                        columns[1]
+                            .y
+                            .saturating_add(row.saturating_add(1 + MAIN_PANEL_TOP_PADDING)),
                         1,
                         1,
                     ),
@@ -827,7 +831,7 @@ impl App {
                     .title(panel_title(self.tr.text("tui_detail_title")))
                     .border_style(Style::default().fg(PURPLE))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
-                    .padding(Padding::horizontal(1)),
+                    .padding(MAIN_PANEL_PADDING),
             );
         frame.render_widget(detail, columns[1]);
     }
@@ -1074,9 +1078,11 @@ impl UiRegions {
         let [list_column, _] = content_columns(content_area);
         let list = Rect::new(
             list_column.x.saturating_add(2),
-            list_column.y.saturating_add(1),
+            list_column.y.saturating_add(1 + MAIN_PANEL_TOP_PADDING),
             list_column.width.saturating_sub(4),
-            list_column.height.saturating_sub(2),
+            list_column
+                .height
+                .saturating_sub(2 + MAIN_PANEL_TOP_PADDING),
         );
         let tab_row = Rect::new(
             tabs_area.x.saturating_add(1),
@@ -1141,7 +1147,7 @@ impl UiRegions {
             settings_popup.height.saturating_sub(4),
         );
         let [settings_content, settings_buttons] =
-            Layout::vertical([Constraint::Min(6), Constraint::Length(3)]).areas(settings_inner);
+            Layout::vertical([Constraint::Min(6), Constraint::Length(1)]).areas(settings_inner);
         let [settings_list_panel, _, settings_detail_panel] = Layout::horizontal([
             Constraint::Percentage(43),
             Constraint::Length(1),
@@ -2099,7 +2105,7 @@ mod tests {
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 26), 0, 8, false, false, false),
-            Some(MouseAction::Stop)
+            Some(MouseAction::Select(7))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
@@ -2116,6 +2122,10 @@ mod tests {
         assert_eq!(
             regions.action_at(mouse_down(90, 28), 0, 8, false, false, false),
             Some(MouseAction::Quit)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(90, 29), 0, 8, false, false, false),
+            None
         );
     }
 
@@ -2240,14 +2250,14 @@ mod tests {
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 20), 0, 3, false, false, true),
+            None
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(30, 22), 0, 3, false, false, true),
             Some(MouseAction::RemoveRule)
         );
         assert_eq!(
-            regions.action_at(mouse_down(30, 21), 0, 3, false, false, true),
-            Some(MouseAction::RemoveRule)
-        );
-        assert_eq!(
-            regions.action_at(mouse_down(55, 21), 0, 3, false, false, true),
+            regions.action_at(mouse_down(55, 22), 0, 3, false, false, true),
             Some(MouseAction::CloseSettings)
         );
     }
