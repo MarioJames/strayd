@@ -42,11 +42,12 @@ const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
 const GROUP_ITEM_HEIGHT: u16 = 3;
 const RULE_ITEM_HEIGHT: u16 = 3;
-const TAB_HEIGHT: u16 = 3;
+const TAB_HEIGHT: u16 = 4;
 const FOOTER_HEIGHT: u16 = 2;
 const FOOTER_ACTION_HEIGHT: u16 = 1;
 const MAIN_PANEL_TOP_PADDING: u16 = 1;
 const MAIN_PANEL_PADDING: Padding = Padding::new(1, 1, MAIN_PANEL_TOP_PADDING, 0);
+const PANEL_TITLE_LEFT_INSET: u16 = 3;
 
 pub fn run(
     args: TuiArgs,
@@ -803,26 +804,11 @@ impl App {
                 commands: Vec::new(),
             });
         let content_height = columns[1].height.saturating_sub(2 + MAIN_PANEL_TOP_PADDING);
-        let copy_x = columns[1]
-            .x
-            .saturating_add(columns[1].width.saturating_sub(3));
         self.regions.command_copies = detail
             .commands
             .iter()
             .filter(|(row, _)| *row < content_height)
-            .map(|(row, command)| {
-                (
-                    Rect::new(
-                        copy_x,
-                        columns[1]
-                            .y
-                            .saturating_add(row.saturating_add(1 + MAIN_PANEL_TOP_PADDING)),
-                        1,
-                        1,
-                    ),
-                    command.clone(),
-                )
-            })
+            .map(|(row, command)| (command_copy_rect(columns[1], *row), command.clone()))
             .collect();
         let detail = Paragraph::new(detail.text)
             .style(Style::default().fg(TEXT).bg(SURFACE))
@@ -1085,9 +1071,11 @@ impl UiRegions {
                 .saturating_sub(2 + MAIN_PANEL_TOP_PADDING),
         );
         let tab_row = Rect::new(
-            tabs_area.x.saturating_add(1),
-            tabs_area.y.saturating_add(1),
-            tabs_area.width.saturating_sub(2),
+            tabs_area.x.saturating_add(PANEL_TITLE_LEFT_INSET),
+            tabs_area.y.saturating_add(1 + MAIN_PANEL_TOP_PADDING),
+            tabs_area
+                .width
+                .saturating_sub(PANEL_TITLE_LEFT_INSET.saturating_mul(2)),
             1,
         );
         let tab_areas = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(tab_row);
@@ -1385,6 +1373,17 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
         && column < area.x.saturating_add(area.width)
         && row >= area.y
         && row < area.y.saturating_add(area.height)
+}
+
+fn command_copy_rect(panel: Rect, row: u16) -> Rect {
+    Rect::new(
+        panel.x.saturating_add(2),
+        panel
+            .y
+            .saturating_add(row.saturating_add(1 + MAIN_PANEL_TOP_PADDING)),
+        panel.width.saturating_sub(4),
+        1,
+    )
 }
 
 fn tab_matches(tab: TabTarget, group: &ResourceGroup) -> bool {
@@ -1706,31 +1705,25 @@ fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> DetailCo
         if let Some(unit) = &service.manager_unit {
             lines.push(detail_line(tr.text("tui_field_unit"), unit.clone(), width));
         }
-        let wrapped_command = wrap_command(&service.command, width.saturating_sub(11).max(1));
-        let last_command_line = wrapped_command.len().saturating_sub(1);
+        let wrapped_command = wrap_command(&service.command, width.saturating_sub(9).max(1));
         for (command_line_index, command_line) in wrapped_command.into_iter().enumerate() {
             let label = if command_line_index == 0 {
                 padded_label(tr.text("tui_field_command"), 9)
             } else {
                 " ".repeat(9)
             };
-            let padding =
-                width.saturating_sub(9 + UnicodeWidthStr::width(command_line.as_str()) + 1);
-            let row = lines.len() as u16;
-            let is_last = command_line_index == last_command_line;
             lines.push(Line::from(vec![
                 Span::styled(label, Style::default().fg(MUTED)),
                 Span::raw(command_line),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(
-                    if is_last { "⧉" } else { " " },
-                    Style::default().fg(CYAN).bold(),
-                ),
             ]));
-            if is_last {
-                commands.push((row, service.command.clone()));
-            }
         }
+        let copy_row = lines.len() as u16;
+        lines.push(solid_button_line(
+            tr.text("tui_copy_command_button"),
+            width,
+            CYAN,
+        ));
+        commands.push((copy_row, service.command.clone()));
         if !service.can_terminate {
             lines.push(Line::from(Span::styled(
                 tr.text("tui_protected"),
@@ -1763,6 +1756,17 @@ fn padded_label(value: &str, width: usize) -> String {
         "{value}{}",
         " ".repeat(width.saturating_sub(UnicodeWidthStr::width(value)))
     )
+}
+
+fn solid_button_line(label: &str, width: usize, background: Color) -> Line<'static> {
+    let label_width = UnicodeWidthStr::width(label);
+    let available = width.saturating_sub(label_width);
+    let left = available / 2;
+    let right = available.saturating_sub(left);
+    Line::from(Span::styled(
+        format!("{}{}{}", " ".repeat(left), label, " ".repeat(right)),
+        Style::default().fg(BASE).bg(background).bold(),
+    ))
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -2010,9 +2014,9 @@ mod tests {
     use ratatui::layout::Rect;
 
     use super::{
-        MouseAction, NavigationAction, UiRegions, footer_actions, is_quit_key, navigation_action,
-        next_tab_target, osc52_sequence, padded_label, previous_tab_target, stop_target_for_tab,
-        text_selection_transition, truncate_text, wrap_command,
+        MouseAction, NavigationAction, UiRegions, command_copy_rect, footer_actions, is_quit_key,
+        navigation_action, next_tab_target, osc52_sequence, padded_label, previous_tab_target,
+        stop_target_for_tab, text_selection_transition, truncate_text, wrap_command,
     };
     use port_deck_cli::{StopTarget, TabTarget};
 
@@ -2092,20 +2096,20 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(3, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(3, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(50, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(50, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(8, 8), 2, 8, false, false, false),
+            regions.action_at(mouse_down(8, 9), 2, 8, false, false, false),
             Some(MouseAction::Select(3))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 26), 0, 8, false, false, false),
-            Some(MouseAction::Select(7))
+            Some(MouseAction::Select(6))
         );
         assert_eq!(
             regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
@@ -2164,12 +2168,19 @@ mod tests {
     }
 
     #[test]
-    fn command_copy_icon_is_clickable() {
+    fn command_copy_button_spans_the_detail_content_width() {
         let mut regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
-        regions.command_copies = vec![(Rect::new(80, 8, 1, 1), "npm run dev".into())];
+        regions.command_copies = vec![(
+            command_copy_rect(Rect::new(44, 4, 56, 24), 15),
+            "npm run dev".into(),
+        )];
 
         assert_eq!(
-            regions.action_at(mouse_down(80, 8), 0, 0, false, false, false),
+            regions.action_at(mouse_down(46, 21), 0, 0, false, false, false),
+            Some(MouseAction::CopyCommand(0))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(97, 21), 0, 0, false, false, false),
             Some(MouseAction::CopyCommand(0))
         );
     }
@@ -2179,23 +2190,23 @@ mod tests {
         let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(18, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(18, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(38, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(38, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Dev))
         );
         assert_eq!(
-            regions.action_at(mouse_down(58, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(58, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(78, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(78, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::System))
         );
         assert_eq!(
-            regions.action_at(mouse_down(96, 1), 0, 8, false, false, false),
+            regions.action_at(mouse_down(96, 2), 0, 8, false, false, false),
             Some(MouseAction::SetTab(TabTarget::System))
         );
     }

@@ -87,6 +87,7 @@ tui_text_selection_opened = "Text selection enabled · drag to select/copy · pr
 tui_text_selection_closed = "Interactive mouse controls restored"
 tui_command_copied = "Command copied to the terminal clipboard"
 tui_command_copy_failed = "Could not copy command: {error}"
+tui_copy_command_button = "COPY COMMAND"
 tui_confirm_summary = "About to stop {label} · {count} item(s)"
 tui_confirm_hint = "Press Enter to confirm, Esc to cancel"
 tui_confirm_title = " CONFIRM STOP "

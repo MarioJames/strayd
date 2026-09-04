@@ -87,6 +87,7 @@ tui_text_selection_opened = "已启用文字选择 · 直接拖拽选择并复�
 tui_text_selection_closed = "已恢复交互鼠标操作"
 tui_command_copied = "命令已复制到终端剪贴板"
 tui_command_copy_failed = "无法复制命令：{error}"
+tui_copy_command_button = "复制命令"
 tui_confirm_summary = "即将关闭{label} · {count} 项"
 tui_confirm_hint = "按 Enter 确认，Esc 取消"
 tui_confirm_title = " 确认关闭 "
