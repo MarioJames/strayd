@@ -1,4 +1,5 @@
 use std::io::{self, IsTerminal, Stdout};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -10,8 +11,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use port_deck_cli::{
-    Filters, StopTarget, StraydConfig, TabTarget, TuiArgs, apply_visibility_config,
-    build_stop_plan, runtime_slug,
+    ConfigPlatform, ConfigResourceKind, Filters, HideField, HideRule, Language, StopTarget,
+    StraydConfig, TabTarget, Translator, TuiArgs, apply_visibility_config, build_stop_plan,
+    runtime_slug, save_config,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -21,7 +23,7 @@ use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap,
+    Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap,
 };
 
 const CYAN: Color = Color::Rgb(61, 214, 208);
@@ -32,53 +34,67 @@ const SELECTED: Color = Color::Rgb(25, 40, 58);
 const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
 
-pub fn run(args: TuiArgs, config: StraydConfig) -> Result<(), String> {
+pub fn run(
+    args: TuiArgs,
+    config: StraydConfig,
+    config_path: Option<PathBuf>,
+    language: Language,
+) -> Result<(), String> {
+    let tr = Translator::new(language);
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err("TUI 需要交互终端；脚本中请使用 list 或 stop 子命令".into());
+        return Err(tr.text("tui_requires_terminal").into());
     }
 
-    enable_raw_mode().map_err(|error| format!("无法进入终端 raw mode: {error}"))?;
+    enable_raw_mode()
+        .map_err(|error| tr.format("tui_raw_mode_error", &[("error", error.to_string())]))?;
     let mut stdout = io::stdout();
     if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
         let _ = disable_raw_mode();
-        return Err(format!("无法进入终端备用屏幕: {error}"));
+        return Err(tr.format("tui_alt_screen_error", &[("error", error.to_string())]));
     }
     let mut terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
         Ok(terminal) => terminal,
         Err(error) => {
             let _ = disable_raw_mode();
             let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
-            return Err(format!("无法创建终端界面: {error}"));
+            return Err(tr.format("tui_create_error", &[("error", error.to_string())]));
         }
     };
 
-    let result = App::new(args, config).and_then(|mut app| app.run(&mut terminal));
-    let cleanup_result = restore_terminal(&mut terminal);
+    let result = App::new(args, config, config_path, tr).and_then(|mut app| app.run(&mut terminal));
+    let cleanup_result = restore_terminal(&mut terminal, tr);
     result.and(cleanup_result)
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), String> {
-    disable_raw_mode().map_err(|error| format!("无法恢复终端模式: {error}"))?;
+fn restore_terminal(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    tr: Translator,
+) -> Result<(), String> {
+    disable_raw_mode()
+        .map_err(|error| tr.format("tui_restore_mode_error", &[("error", error.to_string())]))?;
     execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
         LeaveAlternateScreen
     )
-    .map_err(|error| format!("无法离开终端备用屏幕: {error}"))?;
+    .map_err(|error| tr.format("tui_leave_screen_error", &[("error", error.to_string())]))?;
     terminal
         .show_cursor()
-        .map_err(|error| format!("无法恢复终端光标: {error}"))
+        .map_err(|error| tr.format("tui_restore_cursor_error", &[("error", error.to_string())]))
 }
 
 struct App {
     snapshot: ScanSnapshot,
     config: StraydConfig,
+    config_path: Option<PathBuf>,
+    tr: Translator,
     tab: TabTarget,
     selected: usize,
     list_offset: usize,
     hidden_count: usize,
     regions: UiRegions,
     pending: Option<PendingStop>,
+    pending_hide: Option<PendingHide>,
     status: String,
     refresh_every: Option<Duration>,
     last_refresh: Instant,
@@ -92,10 +108,14 @@ enum MouseAction {
     StopDev,
     StopTunnel,
     StopGroup,
+    Hide,
+    RemoveRule,
     Refresh,
     Quit,
     Confirm,
     Cancel,
+    ToggleHideField(usize),
+    SaveHide,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +125,9 @@ struct UiRegions {
     footer_actions: Vec<(Rect, MouseAction)>,
     confirm: Rect,
     cancel: Rect,
+    hide_fields: Vec<Rect>,
+    hide_save: Rect,
+    hide_cancel: Rect,
 }
 
 struct PendingStop {
@@ -112,19 +135,40 @@ struct PendingStop {
     services: Vec<ServiceProcess>,
 }
 
+struct PendingHide {
+    service: ServiceProcess,
+    fields: Vec<HideChoice>,
+    selected: usize,
+}
+
+struct HideChoice {
+    field: HideField,
+    value: String,
+    available: bool,
+    checked: bool,
+}
+
 impl App {
-    fn new(args: TuiArgs, config: StraydConfig) -> Result<Self, String> {
+    fn new(
+        args: TuiArgs,
+        config: StraydConfig,
+        config_path: Option<PathBuf>,
+        tr: Translator,
+    ) -> Result<Self, String> {
         let (snapshot, hidden_count) = scan_visible(&config);
-        let status = scan_status(&snapshot, hidden_count);
+        let status = scan_status(&snapshot, hidden_count, tr);
         Ok(Self {
             snapshot,
             config,
+            config_path,
+            tr,
             tab: args.tab,
             selected: 0,
             list_offset: 0,
             hidden_count,
-            regions: UiRegions::new(Rect::default()),
+            regions: UiRegions::new(Rect::default(), args.tab, 0),
             pending: None,
+            pending_hide: None,
             status,
             refresh_every: (args.refresh > 0).then(|| Duration::from_secs(args.refresh)),
             last_refresh: Instant::now(),
@@ -134,14 +178,19 @@ impl App {
 
     fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), String> {
         while !self.should_quit {
-            terminal
-                .draw(|frame| self.draw(frame))
-                .map_err(|error| format!("终端渲染失败: {error}"))?;
+            terminal.draw(|frame| self.draw(frame)).map_err(|error| {
+                self.tr
+                    .format("tui_render_error", &[("error", error.to_string())])
+            })?;
 
-            if event::poll(Duration::from_millis(200))
-                .map_err(|error| format!("无法读取终端事件: {error}"))?
-            {
-                match event::read().map_err(|error| format!("无法读取终端事件: {error}"))? {
+            if event::poll(Duration::from_millis(200)).map_err(|error| {
+                self.tr
+                    .format("tui_event_error", &[("error", error.to_string())])
+            })? {
+                match event::read().map_err(|error| {
+                    self.tr
+                        .format("tui_event_error", &[("error", error.to_string())])
+                })? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
                     Event::Mouse(mouse) => self.handle_mouse(mouse),
                     _ => {}
@@ -151,6 +200,7 @@ impl App {
                 .refresh_every
                 .is_some_and(|interval| self.last_refresh.elapsed() >= interval)
                 && self.pending.is_none()
+                && self.pending_hide.is_none()
             {
                 self.refresh();
             }
@@ -159,12 +209,26 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.pending_hide.is_some() {
+            match key.code {
+                KeyCode::Down | KeyCode::Char('j') => self.select_next_hide_field(),
+                KeyCode::Up | KeyCode::Char('k') => self.select_previous_hide_field(),
+                KeyCode::Char(' ') => self.toggle_selected_hide_field(),
+                KeyCode::Enter => self.save_pending_hide(),
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.pending_hide = None;
+                    self.status = self.tr.text("tui_cancelled").into();
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.pending.is_some() {
             match key.code {
                 KeyCode::Enter => self.confirm_pending(),
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.pending = None;
-                    self.status = "已取消关闭操作".into();
+                    self.status = self.tr.text("tui_cancelled").into();
                 }
                 _ => {}
             }
@@ -183,29 +247,47 @@ impl App {
             KeyCode::Char('2') => self.set_tab(TabTarget::Dev),
             KeyCode::Char('3') => self.set_tab(TabTarget::Tunnels),
             KeyCode::Char('4') => self.set_tab(TabTarget::System),
+            KeyCode::Char('5') => self.set_tab(TabTarget::Config),
             KeyCode::Down | KeyCode::Char('j') => self.select_next(),
             KeyCode::Up | KeyCode::Char('k') => self.select_previous(),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.select_last(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('d') => self.prepare_stop(StopTarget::Dev, "开发服务"),
-            KeyCode::Char('t') => self.prepare_stop(StopTarget::Tunnel, "隧道"),
-            KeyCode::Char('x') => self.prepare_stop(StopTarget::Group, "整个关联组"),
+            KeyCode::Char('h') if self.tab != TabTarget::Config => self.prepare_hide(),
+            KeyCode::Char('u') | KeyCode::Delete if self.tab == TabTarget::Config => {
+                self.remove_selected_rule()
+            }
+            KeyCode::Char('d') => self.prepare_stop(StopTarget::Dev, self.tr.text("tui_stop_dev")),
+            KeyCode::Char('t') => {
+                self.prepare_stop(StopTarget::Tunnel, self.tr.text("tui_stop_tunnel"))
+            }
+            KeyCode::Char('x') => {
+                self.prepare_stop(StopTarget::Group, self.tr.text("tui_stop_group"))
+            }
             _ => {}
         }
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
-            MouseEventKind::ScrollDown if self.pending.is_none() => self.select_next(),
-            MouseEventKind::ScrollUp if self.pending.is_none() => self.select_previous(),
+            MouseEventKind::ScrollDown if self.pending.is_none() && self.pending_hide.is_none() => {
+                self.select_next()
+            }
+            MouseEventKind::ScrollUp if self.pending.is_none() && self.pending_hide.is_none() => {
+                self.select_previous()
+            }
             MouseEventKind::Down(MouseButton::Left) => {
-                let visible_len = self.visible_group_indices().len();
+                let visible_len = if self.tab == TabTarget::Config {
+                    self.config.display.hide.len()
+                } else {
+                    self.visible_group_indices().len()
+                };
                 if let Some(action) = self.regions.action_at(
                     mouse,
                     self.list_offset,
                     visible_len,
                     self.pending.is_some(),
+                    self.pending_hide.is_some(),
                 ) {
                     self.handle_mouse_action(action);
                 }
@@ -218,24 +300,40 @@ impl App {
         match action {
             MouseAction::SetTab(tab) => self.set_tab(tab),
             MouseAction::Select(index) => self.selected = index,
-            MouseAction::StopDev => self.prepare_stop(StopTarget::Dev, "开发服务"),
-            MouseAction::StopTunnel => self.prepare_stop(StopTarget::Tunnel, "隧道"),
-            MouseAction::StopGroup => self.prepare_stop(StopTarget::Group, "整个关联组"),
+            MouseAction::StopDev => {
+                self.prepare_stop(StopTarget::Dev, self.tr.text("tui_stop_dev"))
+            }
+            MouseAction::StopTunnel => {
+                self.prepare_stop(StopTarget::Tunnel, self.tr.text("tui_stop_tunnel"))
+            }
+            MouseAction::StopGroup => {
+                self.prepare_stop(StopTarget::Group, self.tr.text("tui_stop_group"))
+            }
+            MouseAction::Hide => self.prepare_hide(),
+            MouseAction::RemoveRule => self.remove_selected_rule(),
             MouseAction::Refresh => self.refresh(),
             MouseAction::Quit => self.should_quit = true,
             MouseAction::Confirm => self.confirm_pending(),
             MouseAction::Cancel => {
                 self.pending = None;
-                self.status = "已取消关闭操作".into();
+                self.pending_hide = None;
+                self.status = self.tr.text("tui_cancelled").into();
             }
+            MouseAction::ToggleHideField(index) => self.toggle_hide_field(index),
+            MouseAction::SaveHide => self.save_pending_hide(),
         }
     }
 
     fn refresh(&mut self) {
+        let config_selection = (self.tab == TabTarget::Config).then_some(self.selected);
         let selected_id = self.selected_group().map(|group| group.id.clone());
         (self.snapshot, self.hidden_count) = scan_visible(&self.config);
         self.last_refresh = Instant::now();
-        self.status = scan_status(&self.snapshot, self.hidden_count);
+        self.status = scan_status(&self.snapshot, self.hidden_count, self.tr);
+        if let Some(selected) = config_selection {
+            self.selected = selected.min(self.config.display.hide.len().saturating_sub(1));
+            return;
+        }
         let visible = self.visible_group_indices();
         self.selected = selected_id
             .and_then(|id| {
@@ -247,8 +345,12 @@ impl App {
     }
 
     fn prepare_stop(&mut self, target: StopTarget, label: &str) {
+        if self.tab == TabTarget::Config {
+            self.status = self.tr.text("tui_no_actionable_resource").into();
+            return;
+        }
         let Some(group) = self.selected_group().cloned() else {
-            self.status = "当前页面没有可操作资源".into();
+            self.status = self.tr.text("tui_no_actionable_resource").into();
             return;
         };
         match build_stop_plan(&[group], target, &Filters::default(), true) {
@@ -258,8 +360,118 @@ impl App {
                     services,
                 });
             }
-            Err(error) => self.status = error.to_string(),
+            Err(error) => self.status = self.tr.plan_error(&error),
         }
+    }
+
+    fn prepare_hide(&mut self) {
+        if self.config_path.is_none() {
+            self.status = self.tr.text("tui_hide_disabled").into();
+            return;
+        }
+        let Some(group) = self.selected_group() else {
+            self.status = self.tr.text("tui_no_actionable_resource").into();
+            return;
+        };
+        let Some(service) = service_for_hide(group, self.tab).cloned() else {
+            self.status = self.tr.text("tui_no_actionable_resource").into();
+            return;
+        };
+        self.pending_hide = Some(PendingHide::new(service));
+    }
+
+    fn select_next_hide_field(&mut self) {
+        if let Some(pending) = &mut self.pending_hide {
+            pending.selected = (pending.selected + 1).min(pending.fields.len().saturating_sub(1));
+        }
+    }
+
+    fn select_previous_hide_field(&mut self) {
+        if let Some(pending) = &mut self.pending_hide {
+            pending.selected = pending.selected.saturating_sub(1);
+        }
+    }
+
+    fn toggle_selected_hide_field(&mut self) {
+        if let Some(index) = self.pending_hide.as_ref().map(|pending| pending.selected) {
+            self.toggle_hide_field(index);
+        }
+    }
+
+    fn toggle_hide_field(&mut self, index: usize) {
+        let Some(choice) = self
+            .pending_hide
+            .as_mut()
+            .and_then(|pending| pending.fields.get_mut(index))
+        else {
+            return;
+        };
+        if choice.available {
+            choice.checked = !choice.checked;
+        }
+    }
+
+    fn save_pending_hide(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            self.status = self.tr.text("tui_hide_disabled").into();
+            return;
+        };
+        let Some(pending) = self.pending_hide.take() else {
+            return;
+        };
+        let fields = pending
+            .fields
+            .iter()
+            .filter(|choice| choice.available && choice.checked)
+            .map(|choice| choice.field)
+            .collect::<Vec<_>>();
+        let Some(rule) = HideRule::from_service(&pending.service, &fields) else {
+            self.status = self.tr.text("tui_hide_no_fields").into();
+            self.pending_hide = Some(pending);
+            return;
+        };
+
+        self.config.display.hide.push(rule);
+        if let Err(error) = save_config(&path, &self.config) {
+            self.config.display.hide.pop();
+            self.status = self.tr.format(
+                "tui_hide_save_failed",
+                &[("error", self.tr.config_error(&error))],
+            );
+            self.pending_hide = Some(pending);
+            return;
+        }
+        self.refresh();
+        self.status = self
+            .tr
+            .format("tui_hide_saved", &[("path", path.display().to_string())]);
+    }
+
+    fn remove_selected_rule(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            self.status = self.tr.text("tui_hide_disabled").into();
+            return;
+        };
+        if self.config.display.hide.is_empty() || self.selected >= self.config.display.hide.len() {
+            self.status = self.tr.text("tui_no_rule_selected").into();
+            return;
+        }
+        let removed = self.config.display.hide.remove(self.selected);
+        if let Err(error) = save_config(&path, &self.config) {
+            self.config.display.hide.insert(self.selected, removed);
+            self.status = self.tr.format(
+                "tui_remove_failed",
+                &[("error", self.tr.config_error(&error))],
+            );
+            return;
+        }
+        self.selected = self
+            .selected
+            .min(self.config.display.hide.len().saturating_sub(1));
+        self.refresh();
+        self.status = self
+            .tr
+            .format("tui_remove_saved", &[("path", path.display().to_string())]);
     }
 
     fn confirm_pending(&mut self) {
@@ -271,14 +483,24 @@ impl App {
         for service in &pending.services {
             match terminate_service(service) {
                 Ok(()) => stopped += 1,
-                Err(error) => failures.push(format!("pid {}: {error}", service.pid)),
+                Err(error) => failures.push(format!(
+                    "pid {}: {}",
+                    service.pid,
+                    self.tr.engine_error(&error)
+                )),
             }
         }
         self.refresh();
         self.status = if failures.is_empty() {
-            format!("已停止 {stopped} 项")
+            self.tr.stopped(stopped)
         } else {
-            format!("已停止 {stopped} 项；{} 项失败", failures.len())
+            self.tr.format(
+                "tui_stopped_with_failures",
+                &[
+                    ("stopped", stopped.to_string()),
+                    ("failed", failures.len().to_string()),
+                ],
+            )
         };
     }
 
@@ -287,7 +509,8 @@ impl App {
             TabTarget::All => TabTarget::Dev,
             TabTarget::Dev => TabTarget::Tunnels,
             TabTarget::Tunnels => TabTarget::System,
-            TabTarget::System => TabTarget::All,
+            TabTarget::System => TabTarget::Config,
+            TabTarget::Config => TabTarget::All,
         };
         self.selected = 0;
         self.list_offset = 0;
@@ -295,10 +518,11 @@ impl App {
 
     fn previous_tab(&mut self) {
         self.tab = match self.tab {
-            TabTarget::All => TabTarget::System,
+            TabTarget::All => TabTarget::Config,
             TabTarget::Dev => TabTarget::All,
             TabTarget::Tunnels => TabTarget::Dev,
             TabTarget::System => TabTarget::Tunnels,
+            TabTarget::Config => TabTarget::System,
         };
         self.selected = 0;
         self.list_offset = 0;
@@ -311,7 +535,7 @@ impl App {
     }
 
     fn select_next(&mut self) {
-        let len = self.visible_group_indices().len();
+        let len = self.selectable_len();
         if len > 0 {
             self.selected = (self.selected + 1).min(len - 1);
         }
@@ -322,7 +546,15 @@ impl App {
     }
 
     fn select_last(&mut self) {
-        self.selected = self.visible_group_indices().len().saturating_sub(1);
+        self.selected = self.selectable_len().saturating_sub(1);
+    }
+
+    fn selectable_len(&self) -> usize {
+        if self.tab == TabTarget::Config {
+            self.config.display.hide.len()
+        } else {
+            self.visible_group_indices().len()
+        }
     }
 
     fn visible_group_indices(&self) -> Vec<usize> {
@@ -349,7 +581,13 @@ impl App {
             Constraint::Length(2),
         ])
         .split(area);
-        self.regions = UiRegions::new(area);
+        self.regions = UiRegions::new(
+            area,
+            self.tab,
+            self.pending_hide
+                .as_ref()
+                .map_or(0, |pending| pending.fields.len()),
+        );
 
         self.draw_tabs(frame, sections[0]);
         self.draw_content(frame, sections[1]);
@@ -357,44 +595,62 @@ impl App {
         if let Some(pending) = &self.pending {
             self.draw_confirmation(frame, area, pending);
         }
+        if let Some(pending) = &self.pending_hide {
+            self.draw_hide_editor(frame, area, pending);
+        }
     }
 
     fn draw_tabs(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let titles = ["1 ALL", "2 DEV", "3 TUNNELS", "4 SYSTEM"]
-            .into_iter()
-            .map(Line::from)
-            .collect::<Vec<_>>();
-        let selected = match self.tab {
-            TabTarget::All => 0,
-            TabTarget::Dev => 1,
-            TabTarget::Tunnels => 2,
-            TabTarget::System => 3,
-        };
-        let tabs = Tabs::new(titles)
-            .select(selected)
-            .block(
-                Block::bordered()
-                    .border_type(BorderType::Rounded)
-                    .title(" STRAYD / TERMINAL CONTROL "),
-            )
-            .style(Style::default().fg(MUTED))
-            .highlight_style(Style::default().fg(CYAN).add_modifier(Modifier::BOLD))
-            .divider("  ");
-        frame.render_widget(tabs, area);
+        frame.render_widget(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(self.tr.text("tui_title")),
+            area,
+        );
+        let labels = [
+            self.tr.text("tui_tab_all"),
+            self.tr.text("tui_tab_dev"),
+            self.tr.text("tui_tab_tunnels"),
+            self.tr.text("tui_tab_system"),
+            self.tr.text("tui_tab_config"),
+        ];
+        for ((tab_area, tab), label) in self.regions.tabs.iter().zip(labels) {
+            let selected = *tab == self.tab;
+            frame.render_widget(
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(if selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(CYAN)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(MUTED)
+                    }),
+                *tab_area,
+            );
+        }
     }
 
     fn draw_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        if self.tab == TabTarget::Config {
+            self.draw_config_content(frame, area);
+            return;
+        }
         let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
             .split(area);
         let visible = self.visible_group_indices();
         let items = visible
             .iter()
-            .map(|index| group_list_item(&self.snapshot.groups[*index]))
+            .map(|index| group_list_item(&self.snapshot.groups[*index], self.tr))
             .collect::<Vec<_>>();
         let list = List::new(items)
             .block(
                 Block::bordered()
-                    .title(format!(" RESOURCES / {} ", visible.len()))
+                    .title(self.tr.format(
+                        "tui_resources_title",
+                        &[("count", visible.len().to_string())],
+                    ))
                     .border_style(Style::default().fg(Color::DarkGray))
                     .padding(Padding::horizontal(1)),
             )
@@ -413,12 +669,12 @@ impl App {
 
         let detail = self
             .selected_group()
-            .map(group_detail)
-            .unwrap_or_else(|| Text::from("当前 Tab 没有资源"));
+            .map(|group| group_detail(group, self.tr))
+            .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_tab")));
         let detail = Paragraph::new(detail)
             .block(
                 Block::bordered()
-                    .title(" RELATION & PROCESS DETAIL ")
+                    .title(self.tr.text("tui_detail_title"))
                     .border_style(Style::default().fg(PURPLE))
                     .padding(Padding::horizontal(1)),
             )
@@ -426,34 +682,81 @@ impl App {
         frame.render_widget(detail, columns[1]);
     }
 
+    fn draw_config_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
+            .split(area);
+        let items = self
+            .config
+            .display
+            .hide
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| rule_list_item(index, rule, self.tr))
+            .collect::<Vec<_>>();
+        let list = List::new(items)
+            .block(
+                Block::bordered()
+                    .title(self.tr.format(
+                        "tui_rules_title",
+                        &[("count", self.config.display.hide.len().to_string())],
+                    ))
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .padding(Padding::horizontal(1)),
+            )
+            .highlight_symbol("▌ ")
+            .highlight_style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(SELECTED)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let has_rules = !self.config.display.hide.is_empty();
+        let mut state = ListState::default()
+            .with_selected(has_rules.then_some(self.selected))
+            .with_offset(self.list_offset);
+        frame.render_stateful_widget(list, columns[0], &mut state);
+        self.list_offset = state.offset();
+
+        let detail = self
+            .config
+            .display
+            .hide
+            .get(self.selected)
+            .map(|rule| rule_detail(rule, self.tr, self.config_path.as_deref()))
+            .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_rules")));
+        frame.render_widget(
+            Paragraph::new(detail)
+                .block(
+                    Block::bordered()
+                        .title(self.tr.text("tui_config_detail_title"))
+                        .border_style(Style::default().fg(PURPLE))
+                        .padding(Padding::horizontal(1)),
+                )
+                .wrap(Wrap { trim: false }),
+            columns[1],
+        );
+    }
+
     fn draw_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
         let action_row = Rect::new(area.x, area.y, area.width, 1);
-        let action_areas = footer_action_areas(action_row);
-        for (index, (label, key_label, danger)) in [
-            ("SERVICE", "d", true),
-            ("TUNNEL", "t", true),
-            ("GROUP", "x", true),
-            ("REFRESH", "r", false),
-            ("QUIT", "q", false),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let actions = footer_actions(self.tab);
+        let action_areas = footer_action_areas(action_row, actions.len());
+        for ((area, action), _) in action_areas.iter().zip(&actions).zip(0..) {
+            let (label, key_label, danger) = action_label(*action, self.tr);
             let color = if danger { DANGER } else { CYAN };
             let button = Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!(" {key_label} "),
                     Style::default().fg(Color::Black).bg(color).bold(),
                 ),
-                Span::styled(format!(" {label}"), Style::default().fg(color)),
+                Span::styled(format!("   {label}"), Style::default().fg(color)),
             ]));
-            frame.render_widget(button, action_areas[index]);
+            frame.render_widget(button, *area);
         }
-        if let Some(hint_area) = action_areas.get(5) {
+        if let Some(hint_area) = footer_hint_area(action_row, actions.len()) {
             frame.render_widget(
-                Paragraph::new("mouse: tabs · rows · actions · wheel")
-                    .style(Style::default().fg(MUTED)),
-                *hint_area,
+                Paragraph::new(self.tr.text("tui_mouse_hint")).style(Style::default().fg(MUTED)),
+                hint_area,
             );
         }
         let status = Line::from(Span::styled(
@@ -473,38 +776,124 @@ impl App {
         frame.render_widget(Clear, popup);
         let text = Text::from(vec![
             Line::from(Span::styled(
-                format!("即将关闭 {} · {} 项", pending.label, pending.services.len()),
+                self.tr.format(
+                    "tui_confirm_summary",
+                    &[
+                        ("label", pending.label.clone()),
+                        ("count", pending.services.len().to_string()),
+                    ],
+                ),
                 Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from("按 Enter 确认，Esc 取消").alignment(Alignment::Center),
+            Line::from(self.tr.text("tui_confirm_hint")).alignment(Alignment::Center),
         ]);
         let paragraph = Paragraph::new(text).alignment(Alignment::Center).block(
             Block::bordered()
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(DANGER))
-                .title(" CONFIRM STOP ")
+                .title(self.tr.text("tui_confirm_title"))
                 .style(Style::default().bg(PANEL)),
         );
         frame.render_widget(paragraph, popup);
         let [confirm, cancel] = confirmation_button_areas(popup);
         frame.render_widget(
-            Paragraph::new(" ENTER / CONFIRM ")
+            Paragraph::new(self.tr.text("tui_confirm_button"))
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::Black).bg(DANGER).bold()),
             confirm,
         );
         frame.render_widget(
-            Paragraph::new(" ESC / CANCEL ")
+            Paragraph::new(self.tr.text("tui_cancel_button"))
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::Black).bg(MUTED).bold()),
             cancel,
         );
     }
+
+    fn draw_hide_editor(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingHide) {
+        let popup = centered_rect(72, 17, area);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Block::bordered()
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(PURPLE))
+                .title(self.tr.text("tui_hide_title"))
+                .style(Style::default().bg(PANEL)),
+            popup,
+        );
+        let port = pending
+            .service
+            .tunnel_target
+            .as_ref()
+            .map(|target| target.port)
+            .or_else(|| pending.service.ports.first().copied())
+            .map_or_else(|| "-".into(), |port| port.to_string());
+        frame.render_widget(
+            Paragraph::new(self.tr.format(
+                "tui_hide_summary",
+                &[
+                    ("runtime", runtime_slug(&pending.service.runtime).into()),
+                    ("port", port),
+                ],
+            ))
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(CYAN).bold()),
+            Rect::new(popup.x + 2, popup.y + 2, popup.width.saturating_sub(4), 1),
+        );
+        for (index, (choice, field_area)) in pending
+            .fields
+            .iter()
+            .zip(&self.regions.hide_fields)
+            .enumerate()
+        {
+            let check = if choice.checked { "[x]" } else { "[ ]" };
+            let label = hide_field_label(choice.field, self.tr);
+            let value = if choice.available {
+                choice.value.as_str()
+            } else {
+                self.tr.text("tui_value_unavailable")
+            };
+            let style = if !choice.available {
+                Style::default().fg(Color::DarkGray)
+            } else if index == pending.selected {
+                Style::default().fg(Color::Black).bg(CYAN).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            frame.render_widget(
+                Paragraph::new(format!(" {check} {label:<14} {value}")).style(style),
+                *field_area,
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(self.tr.text("tui_hide_hint"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(MUTED)),
+            Rect::new(
+                popup.x + 2,
+                popup.y + popup.height.saturating_sub(3),
+                popup.width.saturating_sub(4),
+                1,
+            ),
+        );
+        frame.render_widget(
+            Paragraph::new(self.tr.text("tui_confirm_button"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(PURPLE).bold()),
+            self.regions.hide_save,
+        );
+        frame.render_widget(
+            Paragraph::new(self.tr.text("tui_cancel_button"))
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(MUTED).bold()),
+            self.regions.hide_cancel,
+        );
+    }
 }
 
 impl UiRegions {
-    fn new(area: Rect) -> Self {
+    fn new(area: Rect, tab: TabTarget, hide_field_count: usize) -> Self {
         let [tabs_area, content_area, footer_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(10),
@@ -520,42 +909,66 @@ impl UiRegions {
             list_column.width.saturating_sub(4),
             list_column.height.saturating_sub(2),
         );
-        let tab_y = tabs_area.y.saturating_add(1);
-        let mut tab_x = tabs_area.x.saturating_add(1);
+        let tab_row = Rect::new(
+            tabs_area.x.saturating_add(1),
+            tabs_area.y.saturating_add(1),
+            tabs_area.width.saturating_sub(2),
+            1,
+        );
+        let tab_areas = Layout::horizontal([Constraint::Ratio(1, 5); 5]).split(tab_row);
         let tabs = [
-            (5, TabTarget::All),
-            (5, TabTarget::Dev),
-            (9, TabTarget::Tunnels),
-            (8, TabTarget::System),
-        ]
-        .into_iter()
-        .map(|(width, tab)| {
-            let rect = Rect::new(tab_x, tab_y, width, 1);
-            tab_x = tab_x.saturating_add(width + 2);
-            (rect, tab)
-        })
-        .collect();
-        let action_row = Rect::new(footer_area.x, footer_area.y, footer_area.width, 1);
-        let footer_areas = footer_action_areas(action_row);
-        let footer_actions = [
-            MouseAction::StopDev,
-            MouseAction::StopTunnel,
-            MouseAction::StopGroup,
-            MouseAction::Refresh,
-            MouseAction::Quit,
+            TabTarget::All,
+            TabTarget::Dev,
+            TabTarget::Tunnels,
+            TabTarget::System,
+            TabTarget::Config,
         ]
         .into_iter()
         .enumerate()
-        .map(|(index, action)| (footer_areas[index], action))
+        .map(|(index, tab)| (tab_areas[index], tab))
         .collect();
+        let action_row = Rect::new(footer_area.x, footer_area.y, footer_area.width, 1);
+        let actions = footer_actions(tab);
+        let footer_areas = footer_action_areas(action_row, actions.len());
+        let footer_actions = actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, action)| (footer_areas[index], action))
+            .collect();
         let popup = centered_rect(58, 9, area);
         let [confirm, cancel] = confirmation_button_areas(popup);
+        let hide_popup = centered_rect(72, 17, area);
+        let hide_fields = (0..hide_field_count)
+            .map(|index| {
+                Rect::new(
+                    hide_popup.x.saturating_add(3),
+                    hide_popup.y.saturating_add(4 + index as u16),
+                    hide_popup.width.saturating_sub(6),
+                    1,
+                )
+            })
+            .collect();
+        let hide_save = Rect::new(
+            hide_popup.x + hide_popup.width.saturating_sub(22),
+            hide_popup.y + hide_popup.height.saturating_sub(2),
+            19,
+            1,
+        );
+        let hide_cancel = Rect::new(
+            hide_popup.x.saturating_add(3),
+            hide_popup.y + hide_popup.height.saturating_sub(2),
+            19,
+            1,
+        );
         Self {
             tabs,
             list,
             footer_actions,
             confirm,
             cancel,
+            hide_fields,
+            hide_save,
+            hide_cancel,
         }
     }
 
@@ -565,6 +978,7 @@ impl UiRegions {
         list_offset: usize,
         visible_len: usize,
         confirmation_open: bool,
+        hide_open: bool,
     ) -> Option<MouseAction> {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return None;
@@ -574,6 +988,21 @@ impl UiRegions {
                 .then_some(MouseAction::Confirm)
                 .or_else(|| {
                     rect_contains(self.cancel, mouse.column, mouse.row)
+                        .then_some(MouseAction::Cancel)
+                });
+        }
+        if hide_open {
+            if let Some(index) = self
+                .hide_fields
+                .iter()
+                .position(|area| rect_contains(*area, mouse.column, mouse.row))
+            {
+                return Some(MouseAction::ToggleHideField(index));
+            }
+            return rect_contains(self.hide_save, mouse.column, mouse.row)
+                .then_some(MouseAction::SaveHide)
+                .or_else(|| {
+                    rect_contains(self.hide_cancel, mouse.column, mouse.row)
                         .then_some(MouseAction::Cancel)
                 });
         }
@@ -595,16 +1024,76 @@ impl UiRegions {
     }
 }
 
-fn footer_action_areas(area: Rect) -> [Rect; 6] {
-    Layout::horizontal([
-        Constraint::Length(11),
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(8),
-        Constraint::Min(0),
-    ])
-    .areas(area)
+fn footer_actions(tab: TabTarget) -> Vec<MouseAction> {
+    if tab == TabTarget::Config {
+        vec![
+            MouseAction::RemoveRule,
+            MouseAction::Refresh,
+            MouseAction::Quit,
+        ]
+    } else {
+        vec![
+            MouseAction::Hide,
+            MouseAction::StopDev,
+            MouseAction::StopTunnel,
+            MouseAction::StopGroup,
+            MouseAction::Refresh,
+            MouseAction::Quit,
+        ]
+    }
+}
+
+fn footer_action_areas(area: Rect, count: usize) -> Vec<Rect> {
+    let width = footer_button_width(area, count);
+    let constraints = (0..count)
+        .map(|_| Constraint::Length(width))
+        .chain(std::iter::once(Constraint::Min(0)))
+        .collect::<Vec<_>>();
+    Layout::horizontal(constraints)
+        .split(area)
+        .iter()
+        .take(count)
+        .copied()
+        .collect()
+}
+
+fn footer_hint_area(area: Rect, count: usize) -> Option<Rect> {
+    let used = (count as u16)
+        .saturating_mul(footer_button_width(area, count))
+        .min(area.width);
+    (used < area.width).then(|| {
+        Rect::new(
+            area.x.saturating_add(used),
+            area.y,
+            area.width.saturating_sub(used),
+            1,
+        )
+    })
+}
+
+fn footer_button_width(area: Rect, count: usize) -> u16 {
+    if count == 0 {
+        return 0;
+    }
+    let full_width = (count as u16).saturating_mul(14);
+    if area.width >= full_width.saturating_add(16) {
+        14
+    } else {
+        (area.width / count as u16).min(14)
+    }
+}
+
+fn action_label(action: MouseAction, tr: Translator) -> (&'static str, &'static str, bool) {
+    match action {
+        MouseAction::Hide => (tr.text("tui_action_hide"), "h", false),
+        MouseAction::RemoveRule => (tr.text("tui_action_remove"), "u", true),
+        MouseAction::StopDev => (tr.text("tui_action_service"), "d", true),
+        MouseAction::StopTunnel => (tr.text("tui_action_tunnel"), "t", true),
+        MouseAction::StopGroup => (tr.text("tui_action_group"), "x", true),
+        MouseAction::Refresh => (tr.text("tui_action_refresh"), "r", false),
+        MouseAction::Quit => (tr.text("tui_action_quit"), "q", false),
+        _ => ("", "", false),
+    }
 }
 
 fn confirmation_button_areas(popup: Rect) -> [Rect; 2] {
@@ -641,10 +1130,203 @@ fn tab_matches(tab: TabTarget, group: &ResourceGroup) -> bool {
             .services
             .iter()
             .any(|service| service.resource_kind == ResourceKind::System),
+        TabTarget::Config => false,
     }
 }
 
-fn group_list_item(group: &ResourceGroup) -> ListItem<'static> {
+impl PendingHide {
+    fn new(service: ServiceProcess) -> Self {
+        let port_value = service
+            .ports
+            .iter()
+            .copied()
+            .chain(service.tunnel_target.iter().map(|target| target.port))
+            .map(|port| port.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let project = service
+            .project_name
+            .as_ref()
+            .or(service.cwd.as_ref())
+            .cloned()
+            .unwrap_or_default();
+        let fields = vec![
+            hide_choice(HideField::Port, port_value, true),
+            hide_choice(
+                HideField::Runtime,
+                runtime_slug(&service.runtime).into(),
+                true,
+            ),
+            hide_choice(
+                HideField::Kind,
+                resource_kind_slug(&service.resource_kind).into(),
+                false,
+            ),
+            hide_choice(HideField::Platform, service.platform.as_str().into(), false),
+            hide_choice(HideField::ProcessName, service.process_name.clone(), false),
+            hide_choice(HideField::Project, project, false),
+            hide_choice(HideField::Command, service.command.clone(), false),
+            hide_choice(HideField::Id, service.id.clone(), false),
+        ];
+        Self {
+            service,
+            fields,
+            selected: 0,
+        }
+    }
+}
+
+fn hide_choice(field: HideField, value: String, checked: bool) -> HideChoice {
+    HideChoice {
+        field,
+        available: !value.is_empty(),
+        value,
+        checked,
+    }
+}
+
+fn service_for_hide(group: &ResourceGroup, tab: TabTarget) -> Option<&ServiceProcess> {
+    let kind = match tab {
+        TabTarget::Dev => Some(ResourceKind::Development),
+        TabTarget::Tunnels => Some(ResourceKind::Tunnel),
+        TabTarget::System => Some(ResourceKind::System),
+        TabTarget::All | TabTarget::Config => None,
+    };
+    kind.and_then(|kind| {
+        group
+            .services
+            .iter()
+            .find(|service| service.resource_kind == kind)
+    })
+    .or_else(|| {
+        group
+            .services
+            .iter()
+            .find(|service| service.resource_kind != ResourceKind::Tunnel)
+    })
+    .or_else(|| group.services.first())
+}
+
+fn hide_field_label(field: HideField, tr: Translator) -> &'static str {
+    match field {
+        HideField::Port => tr.text("tui_field_port"),
+        HideField::Runtime => tr.text("tui_field_runtime"),
+        HideField::Kind => tr.text("tui_field_kind"),
+        HideField::Platform => tr.text("tui_field_platform"),
+        HideField::ProcessName => tr.text("tui_field_process_name"),
+        HideField::Project => tr.text("tui_field_project"),
+        HideField::Command => tr.text("tui_field_command"),
+        HideField::Id => tr.text("tui_field_id"),
+    }
+}
+
+fn resource_kind_slug(kind: &ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Development => "dev",
+        ResourceKind::Tunnel => "tunnel",
+        ResourceKind::System => "system",
+        ResourceKind::Other => "other",
+    }
+}
+
+fn rule_list_item(index: usize, rule: &HideRule, tr: Translator) -> ListItem<'static> {
+    let parts = rule_parts(rule, tr);
+    ListItem::new(vec![
+        Line::from(Span::styled(
+            format!(
+                "#{}  {}",
+                index + 1,
+                parts.first().cloned().unwrap_or_default()
+            ),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            parts.into_iter().skip(1).collect::<Vec<_>>().join(" · "),
+            Style::default().fg(MUTED),
+        )),
+    ])
+}
+
+fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) -> Text<'static> {
+    let path = path.map_or_else(
+        || tr.text("tui_config_read_only").into(),
+        |path| tr.format("tui_config_path", &[("path", path.display().to_string())]),
+    );
+    let mut lines = vec![
+        Line::from(Span::styled(path, Style::default().fg(CYAN))),
+        Line::from(""),
+        Line::from(tr.text("tui_rule_matches")),
+        Line::from(""),
+    ];
+    lines.extend(rule_parts(rule, tr).into_iter().map(Line::from));
+    Text::from(lines)
+}
+
+fn rule_parts(rule: &HideRule, tr: Translator) -> Vec<String> {
+    let mut parts = Vec::new();
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_port"),
+        rule.ports.iter().map(u16::to_string).collect(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_runtime"),
+        rule.runtimes.clone(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_kind"),
+        rule.kinds
+            .iter()
+            .map(|kind| match kind {
+                ConfigResourceKind::Dev => "dev",
+                ConfigResourceKind::Tunnel => "tunnel",
+                ConfigResourceKind::System => "system",
+                ConfigResourceKind::Other => "other",
+            })
+            .map(str::to_owned)
+            .collect(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_platform"),
+        rule.platforms
+            .iter()
+            .map(|platform| match platform {
+                ConfigPlatform::Windows => "windows",
+                ConfigPlatform::Linux => "linux",
+                ConfigPlatform::Macos => "macos",
+            })
+            .map(str::to_owned)
+            .collect(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_process_name"),
+        rule.process_names.clone(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_project"),
+        rule.projects.clone(),
+    );
+    push_rule_part(
+        &mut parts,
+        tr.text("tui_field_command"),
+        rule.commands.clone(),
+    );
+    push_rule_part(&mut parts, tr.text("tui_field_id"), rule.ids.clone());
+    parts
+}
+
+fn push_rule_part(parts: &mut Vec<String>, label: &str, values: Vec<String>) {
+    if !values.is_empty() {
+        parts.push(format!("{label}: {}", values.join(", ")));
+    }
+}
+
+fn group_list_item(group: &ResourceGroup, tr: Translator) -> ListItem<'static> {
     let primary = group
         .services
         .iter()
@@ -653,21 +1335,27 @@ fn group_list_item(group: &ResourceGroup) -> ListItem<'static> {
     let name = primary
         .and_then(|service| service.project_name.as_deref())
         .or_else(|| primary.map(|service| service.process_name.as_str()))
-        .unwrap_or("unknown")
+        .unwrap_or(tr.text("tui_unknown"))
         .to_owned();
     let port = group
         .primary_port
         .map(|port| format!(":{port}"))
-        .unwrap_or_else(|| "NO PORT".into());
+        .unwrap_or_else(|| tr.text("tui_no_port").into());
     let tunnels = group
         .services
         .iter()
         .filter(|service| service.resource_kind == ResourceKind::Tunnel)
         .count();
     let suffix = if tunnels > 0 {
-        format!("{} items / {} tunnel", group.services.len(), tunnels)
+        tr.format(
+            "tui_items_tunnel",
+            &[
+                ("count", group.services.len().to_string()),
+                ("tunnels", tunnels.to_string()),
+            ],
+        )
     } else {
-        format!("{} item", group.services.len())
+        tr.format("tui_item", &[("count", group.services.len().to_string())])
     };
     ListItem::new(vec![
         Line::from(vec![
@@ -679,16 +1367,16 @@ fn group_list_item(group: &ResourceGroup) -> ListItem<'static> {
     ])
 }
 
-fn group_detail(group: &ResourceGroup) -> Text<'static> {
+fn group_detail(group: &ResourceGroup, tr: Translator) -> Text<'static> {
     let mut lines = Vec::new();
-    lines.push(route_line(group));
+    lines.push(route_line(group, tr));
     lines.push(Line::from(""));
     for (index, service) in group.services.iter().enumerate() {
         let role = match service.resource_kind {
-            ResourceKind::Development => "SERVICE",
-            ResourceKind::Tunnel => "TUNNEL",
-            ResourceKind::System => "SYSTEM",
-            ResourceKind::Other => "PROCESS",
+            ResourceKind::Development => tr.text("tui_role_service"),
+            ResourceKind::Tunnel => tr.text("tui_role_tunnel"),
+            ResourceKind::System => tr.text("tui_role_system"),
+            ResourceKind::Other => tr.text("tui_role_process"),
         };
         let role_color = match service.resource_kind {
             ResourceKind::Tunnel => PURPLE,
@@ -707,37 +1395,43 @@ fn group_detail(group: &ResourceGroup) -> Text<'static> {
             ),
             Span::styled(format!("  PID {}", service.pid), Style::default().fg(MUTED)),
         ]));
-        lines.push(Line::from(format!("scope    {}", scope_label(service))));
+        lines.push(detail_line(
+            tr.text("tui_field_scope"),
+            scope_label(service),
+        ));
         if !service.ports.is_empty() {
-            lines.push(Line::from(format!(
-                "listen   {}",
+            lines.push(detail_line(
+                tr.text("tui_field_listen"),
                 service
                     .ports
                     .iter()
                     .map(|port| format!(":{port}"))
                     .collect::<Vec<_>>()
-                    .join(", ")
-            )));
+                    .join(", "),
+            ));
         }
         if let Some(target) = &service.tunnel_target {
-            lines.push(Line::from(format!(
-                "proxy    {}:{}",
-                target.host, target.port
-            )));
+            lines.push(detail_line(
+                tr.text("tui_field_proxy"),
+                format!("{}:{}", target.host, target.port),
+            ));
         }
         if let Some(cwd) = &service.cwd {
-            lines.push(Line::from(format!("cwd      {cwd}")));
+            lines.push(detail_line(tr.text("tui_field_cwd"), cwd.clone()));
         }
         if let Some(unit) = &service.manager_unit {
-            lines.push(Line::from(format!("unit     {unit}")));
+            lines.push(detail_line(tr.text("tui_field_unit"), unit.clone()));
         }
         lines.push(Line::from(vec![
-            Span::styled("command  ", Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{:<9}", tr.text("tui_field_command")),
+                Style::default().fg(MUTED),
+            ),
             Span::raw(service.command.clone()),
         ]));
         if !service.can_terminate {
             lines.push(Line::from(Span::styled(
-                "PROTECTED · 不允许结束",
+                tr.text("tui_protected"),
                 Style::default().fg(WARNING).bold(),
             )));
         }
@@ -751,7 +1445,14 @@ fn group_detail(group: &ResourceGroup) -> Text<'static> {
     Text::from(lines)
 }
 
-fn route_line(group: &ResourceGroup) -> Line<'static> {
+fn detail_line(label: &str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<9}"), Style::default().fg(MUTED)),
+        Span::raw(value),
+    ])
+}
+
+fn route_line(group: &ResourceGroup, tr: Translator) -> Line<'static> {
     let tunnel = group
         .services
         .iter()
@@ -762,7 +1463,10 @@ fn route_line(group: &ResourceGroup) -> Line<'static> {
         .find(|service| service.resource_kind != ResourceKind::Tunnel);
     match (tunnel, source, group.primary_port) {
         (Some(tunnel), Some(source), Some(port)) => Line::from(vec![
-            Span::styled("PUBLIC", Style::default().fg(PURPLE).bold()),
+            Span::styled(
+                tr.text("tui_route_public"),
+                Style::default().fg(PURPLE).bold(),
+            ),
             Span::styled("  ──▶  ", Style::default().fg(MUTED)),
             Span::styled(runtime_slug(&tunnel.runtime), Style::default().fg(PURPLE)),
             Span::styled("  ──▶  ", Style::default().fg(MUTED)),
@@ -779,7 +1483,8 @@ fn route_line(group: &ResourceGroup) -> Line<'static> {
         ]),
         (_, Some(source), Some(port)) => Line::from(Span::styled(
             format!(
-                "LOCAL :{port} / {}",
+                "{} :{port} / {}",
+                tr.text("tui_route_local"),
                 source
                     .project_name
                     .as_deref()
@@ -791,7 +1496,10 @@ fn route_line(group: &ResourceGroup) -> Line<'static> {
             format!("{} ──▶ localhost:{port}", runtime_slug(&tunnel.runtime)),
             Style::default().fg(PURPLE).bold(),
         )),
-        _ => Line::from(Span::styled("UNBOUND RESOURCE", Style::default().fg(MUTED))),
+        _ => Line::from(Span::styled(
+            tr.text("tui_route_unbound"),
+            Style::default().fg(MUTED),
+        )),
     }
 }
 
@@ -815,29 +1523,18 @@ fn resource_count(groups: &[ResourceGroup]) -> usize {
     groups.iter().map(|group| group.services.len()).sum()
 }
 
-fn scan_status(snapshot: &ScanSnapshot, hidden_count: usize) -> String {
+fn scan_status(snapshot: &ScanSnapshot, hidden_count: usize, tr: Translator) -> String {
     let resources = snapshot
         .groups
         .iter()
         .map(|group| group.services.len())
         .sum::<usize>();
-    let hidden = if hidden_count > 0 {
-        format!(" · {hidden_count} hidden by config")
-    } else {
-        String::new()
-    };
-    if snapshot.warnings.is_empty() {
-        format!(
-            "{} groups / {resources} resources · scan ready{hidden}",
-            snapshot.groups.len(),
-        )
-    } else {
-        format!(
-            "{} groups / {resources} resources · {} warnings{hidden}",
-            snapshot.groups.len(),
-            snapshot.warnings.len()
-        )
-    }
+    tr.scan_status(
+        snapshot.groups.len(),
+        resources,
+        snapshot.warnings.len(),
+        hidden_count,
+    )
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -883,43 +1580,87 @@ mod tests {
 
     #[test]
     fn mouse_clicks_map_to_tabs_rows_and_footer_actions() {
-        let regions = UiRegions::new(Rect::new(0, 0, 100, 30));
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(3, 1), 0, 8, false),
+            regions.action_at(mouse_down(3, 1), 0, 8, false, false),
             Some(MouseAction::SetTab(TabTarget::All))
         );
         assert_eq!(
-            regions.action_at(mouse_down(17, 1), 0, 8, false),
+            regions.action_at(mouse_down(50, 1), 0, 8, false, false),
             Some(MouseAction::SetTab(TabTarget::Tunnels))
         );
         assert_eq!(
-            regions.action_at(mouse_down(8, 8), 2, 8, false),
+            regions.action_at(mouse_down(8, 8), 2, 8, false, false),
             Some(MouseAction::Select(4))
         );
         assert_eq!(
-            regions.action_at(mouse_down(13, 28), 0, 8, false),
+            regions.action_at(mouse_down(30, 28), 0, 8, false, false),
             Some(MouseAction::StopTunnel)
         );
         assert_eq!(
-            regions.action_at(mouse_down(45, 28), 0, 8, false),
+            regions.action_at(mouse_down(75, 28), 0, 8, false, false),
             Some(MouseAction::Quit)
         );
     }
 
     #[test]
-    fn confirmation_dialog_captures_mouse_clicks() {
-        let regions = UiRegions::new(Rect::new(0, 0, 100, 30));
+    fn the_entire_equal_width_tab_area_is_clickable() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
 
         assert_eq!(
-            regions.action_at(mouse_down(38, 17), 0, 8, true),
+            regions.action_at(mouse_down(18, 1), 0, 8, false, false),
+            Some(MouseAction::SetTab(TabTarget::All))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(38, 1), 0, 8, false, false),
+            Some(MouseAction::SetTab(TabTarget::Dev))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(58, 1), 0, 8, false, false),
+            Some(MouseAction::SetTab(TabTarget::Tunnels))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(78, 1), 0, 8, false, false),
+            Some(MouseAction::SetTab(TabTarget::System))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(96, 1), 0, 8, false, false),
+            Some(MouseAction::SetTab(TabTarget::Config))
+        );
+    }
+
+    #[test]
+    fn confirmation_dialog_captures_mouse_clicks() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 0);
+
+        assert_eq!(
+            regions.action_at(mouse_down(38, 17), 0, 8, true, false),
             Some(MouseAction::Confirm)
         );
         assert_eq!(
-            regions.action_at(mouse_down(57, 17), 0, 8, true),
+            regions.action_at(mouse_down(57, 17), 0, 8, true, false),
             Some(MouseAction::Cancel)
         );
-        assert_eq!(regions.action_at(mouse_down(3, 1), 0, 8, true), None);
+        assert_eq!(regions.action_at(mouse_down(3, 1), 0, 8, true, false), None);
+    }
+
+    #[test]
+    fn hide_rule_editor_fields_and_save_button_are_clickable() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30), TabTarget::All, 8);
+
+        assert_eq!(
+            regions.action_at(mouse_down(20, 11), 0, 8, false, true),
+            Some(MouseAction::ToggleHideField(0))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(70, 22), 0, 8, false, true),
+            Some(MouseAction::SaveHide)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(20, 22), 0, 8, false, true),
+            Some(MouseAction::Cancel)
+        );
     }
 
     fn mouse_down(column: u16, row: u16) -> MouseEvent {

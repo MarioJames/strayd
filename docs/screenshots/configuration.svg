@@ -9,12 +9,15 @@
 
   <text x="52" y="126" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">$</text>
   <text x="80" y="126" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">strayd config init</text>
-  <text x="52" y="158" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">Created ~/.config/strayd/config.toml</text>
+  <text x="52" y="158" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">Created configuration: ~/.config/strayd/config.toml</text>
 
   <text x="52" y="212" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16"># Rules are ORed; fields inside one rule are ANDed.</text>
   <text x="52" y="246" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">version</text>
   <text x="152" y="246" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">=</text>
   <text x="180" y="246" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">1</text>
+  <text x="52" y="278" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">language</text>
+  <text x="152" y="278" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">=</text>
+  <text x="180" y="278" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">"auto"</text>
 
   <text x="52" y="304" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">[[display.hide]]</text>
   <text x="52" y="340" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">ports</text>
@@ -24,7 +27,7 @@
   <text x="152" y="376" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">=</text>
   <text x="180" y="376" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">["sshd"]</text>
 
-  <text x="52" y="432" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16"># Match any resource by kind, platform, process, project, command or id.</text>
+  <text x="52" y="432" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16"># Or select a resource in the TUI, press h, choose fields, and save.</text>
   <text x="52" y="480" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">$</text>
   <text x="80" y="480" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">strayd</text>
   <text x="52" y="526" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">3 groups / 4 resources · scan ready · 1 hidden by config</text>

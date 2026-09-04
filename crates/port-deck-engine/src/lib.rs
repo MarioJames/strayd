@@ -41,6 +41,44 @@ pub struct TerminateRequest {
     pub manager_unit: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineAction {
+    StopWindowsProcess,
+    StopSystemdService,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EngineError {
+    #[error("target resource is not on the current host platform")]
+    WrongPlatform,
+    #[error("refusing to terminate a protected system process")]
+    ProtectedProcess,
+    #[error("process start identity is missing")]
+    MissingStartToken,
+    #[error("invalid systemd service unit")]
+    InvalidServiceUnit,
+    #[error("could not open {url}: {detail}")]
+    OpenUrl { url: String, detail: String },
+    #[error("could not start {program}: {detail}")]
+    Spawn { program: String, detail: String },
+    #[error("could not send TERM to the target process")]
+    SignalDenied,
+    #[error("process no longer exists")]
+    ProcessMissing,
+    #[error("process identity changed")]
+    ProcessChanged,
+    #[error("sshd is a protected remote entry point")]
+    ProtectedSshd,
+    #[error("systemd ownership changed")]
+    ManagedRelationChanged,
+    #[error("command failed")]
+    CommandFailed {
+        action: EngineAction,
+        exit_code: Option<i32>,
+        detail: Option<String>,
+    },
+}
+
 pub const fn host_platform() -> HostPlatform {
     #[cfg(target_os = "windows")]
     return HostPlatform::Windows;
@@ -82,22 +120,22 @@ pub fn scan_all() -> ScanSnapshot {
     }
 }
 
-pub fn terminate(request: TerminateRequest) -> Result<(), String> {
+pub fn terminate(request: TerminateRequest) -> Result<(), EngineError> {
     if request.platform != host_platform() {
-        return Err("目标资源不属于当前宿主平台，请重新扫描".into());
+        return Err(EngineError::WrongPlatform);
     }
     if request.pid <= 4 || request.pid == std::process::id() {
-        return Err("拒绝结束受保护的系统进程".into());
+        return Err(EngineError::ProtectedProcess);
     }
     if request.start_token.is_empty() {
-        return Err("缺少进程启动标识，请重新扫描".into());
+        return Err(EngineError::MissingStartToken);
     }
     if request
         .manager_unit
         .as_deref()
         .is_some_and(|unit| !is_safe_service_unit(unit))
     {
-        return Err("systemd 服务名称无效，请重新扫描".into());
+        return Err(EngineError::InvalidServiceUnit);
     }
 
     terminate_host_process(&request)
@@ -114,17 +152,20 @@ impl From<&ServiceProcess> for TerminateRequest {
     }
 }
 
-pub fn terminate_service(service: &ServiceProcess) -> Result<(), String> {
+pub fn terminate_service(service: &ServiceProcess) -> Result<(), EngineError> {
     terminate(TerminateRequest::from(service))
 }
 
-pub fn open_local_service(port: u16) -> Result<(), String> {
+pub fn open_local_service(port: u16) -> Result<(), EngineError> {
     let url = format!("http://localhost:{port}");
     let mut command = open_command(&url);
     command
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("无法打开 {url}: {error}"))
+        .map_err(|error| EngineError::OpenUrl {
+            url,
+            detail: error.to_string(),
+        })
 }
 
 fn scan_host_services() -> Result<Vec<ServiceProcess>, String> {
@@ -241,19 +282,22 @@ fn parse_linux_manager_unit(cgroup: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn terminate_host_process(request: &TerminateRequest) -> Result<(), String> {
+fn terminate_host_process(request: &TerminateRequest) -> Result<(), EngineError> {
     let system = refreshed_process(request.pid);
     ensure_terminable_identity(&system, request)?;
 
     let output = quiet_command("taskkill.exe")
         .args(["/PID", &request.pid.to_string(), "/T", "/F"])
         .output()
-        .map_err(|error| format!("无法运行 taskkill.exe: {error}"))?;
-    ensure_success("结束 Windows 进程", &output)
+        .map_err(|error| EngineError::Spawn {
+            program: "taskkill.exe".into(),
+            detail: error.to_string(),
+        })?;
+    ensure_success(EngineAction::StopWindowsProcess, &output)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn terminate_host_process(request: &TerminateRequest) -> Result<(), String> {
+fn terminate_host_process(request: &TerminateRequest) -> Result<(), EngineError> {
     let mut system = refreshed_processes();
     ensure_terminable_identity(&system, request)?;
 
@@ -270,7 +314,7 @@ fn terminate_host_process(request: &TerminateRequest) -> Result<(), String> {
         }
     }
     if !signaled {
-        return Err("无法向目标进程发送 TERM；可能需要更高权限".into());
+        return Err(EngineError::SignalDenied);
     }
 
     thread::sleep(Duration::from_millis(800));
@@ -308,17 +352,22 @@ fn refreshed_processes() -> System {
     system
 }
 
-fn ensure_terminable_identity(system: &System, request: &TerminateRequest) -> Result<(), String> {
+fn ensure_terminable_identity(
+    system: &System,
+    request: &TerminateRequest,
+) -> Result<(), EngineError> {
     let pid = Pid::from_u32(request.pid);
     let actual = system
         .process(pid)
         .map(|process| process.start_time().to_string());
-    ensure_process_identity(&request.start_token, actual.as_deref())
-        .map_err(|error| format!("{error}，请重新扫描"))?;
+    ensure_process_identity(&request.start_token, actual.as_deref()).map_err(
+        |error| match error {
+            port_deck_core::IdentityError::Missing => EngineError::ProcessMissing,
+            port_deck_core::IdentityError::Changed => EngineError::ProcessChanged,
+        },
+    )?;
 
-    let process = system
-        .process(pid)
-        .ok_or_else(|| "进程已经结束，请重新扫描".to_string())?;
+    let process = system.process(pid).ok_or(EngineError::ProcessMissing)?;
     let command = process
         .cmd()
         .iter()
@@ -326,7 +375,7 @@ fn ensure_terminable_identity(system: &System, request: &TerminateRequest) -> Re
         .collect::<Vec<_>>()
         .join(" ");
     if classify_runtime(&process.name().to_string_lossy(), &command) == RuntimeKind::Sshd {
-        return Err("sshd 是受保护的远程入口，Strayd 不会结束它".into());
+        return Err(EngineError::ProtectedSshd);
     }
     Ok(())
 }
@@ -354,16 +403,16 @@ fn process_tree(system: &System, root: Pid) -> Vec<(Pid, String)> {
 }
 
 #[cfg(target_os = "linux")]
-fn stop_linux_service(pid: u32, unit: &str) -> Result<(), String> {
+fn stop_linux_service(pid: u32, unit: &str) -> Result<(), EngineError> {
     let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
-        .map_err(|_| "systemd 托管关系已经变化，请重新扫描".to_string())?;
+        .map_err(|_| EngineError::ManagedRelationChanged)?;
     let belongs_to_unit = cgroup.lines().any(|line| {
         line.splitn(3, ':')
             .nth(2)
             .is_some_and(|path| path.split('/').any(|segment| segment == unit))
     });
     if !belongs_to_unit {
-        return Err("systemd 托管关系已经变化，请重新扫描".into());
+        return Err(EngineError::ManagedRelationChanged);
     }
 
     let is_user_unit = cgroup.lines().any(|line| {
@@ -378,8 +427,11 @@ fn stop_linux_service(pid: u32, unit: &str) -> Result<(), String> {
     let output = command
         .args(["stop", "--", unit])
         .output()
-        .map_err(|error| format!("无法运行 systemctl: {error}"))?;
-    ensure_success("停止 systemd 服务", &output)
+        .map_err(|error| EngineError::Spawn {
+            program: "systemctl".into(),
+            detail: error.to_string(),
+        })?;
+    ensure_success(EngineAction::StopSystemdService, &output)
 }
 
 #[cfg(target_os = "windows")]
@@ -412,7 +464,7 @@ fn platform_label(platform: HostPlatform) -> &'static str {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-fn ensure_success(action: &str, output: &Output) -> Result<(), String> {
+fn ensure_success(action: EngineAction, output: &Output) -> Result<(), EngineError> {
     if output.status.success() {
         Ok(())
     } else {
@@ -421,13 +473,13 @@ fn ensure_success(action: &str, output: &Output) -> Result<(), String> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-fn command_error(action: &str, output: &Output) -> String {
+fn command_error(action: EngineAction, output: &Output) -> EngineError {
     let stderr = decode_command_output(&output.stderr);
     let detail = stderr.trim_matches(['\0', '\r', '\n', ' ']);
-    if detail.is_empty() {
-        format!("{action}失败，退出码 {:?}", output.status.code())
-    } else {
-        format!("{action}失败: {detail}")
+    EngineError::CommandFailed {
+        action,
+        exit_code: output.status.code(),
+        detail: (!detail.is_empty()).then(|| detail.to_owned()),
     }
 }
 

@@ -22,6 +22,7 @@ Strayd 会：
 - 支持只停开发服务、只停隧道，或按依赖顺序停止整个关联组。
 - 展示并保护 `sshd`，避免误关远程入口。
 - 根据当前系统自动使用 Windows、Linux/WSL 或 macOS 的原生探测与终止方式。
+- 内置简体中文与英文界面，按系统语言自动选择，并在中性 locale 下使用时区兜底。
 
 ## 安装
 
@@ -50,8 +51,11 @@ npx strayd
 
 | 操作 | 键盘 | 鼠标 |
 | --- | --- | --- |
-| 切换分类 | `Tab`、`Shift+Tab`、`1-4` | 点击顶部 Tab |
+| 切换分类 | `Tab`、`Shift+Tab`、`1-5` | 点击顶部完整分类区域 |
 | 选择资源组 | `↑/↓`、`j/k`、`Home/End` | 点击资源行或滚轮 |
+| 创建隐藏规则 | `h` | 点击 `HIDE` / `隐藏` |
+| 勾选规则字段 | `Space` | 点击字段行 |
+| 移除隐藏规则 | 在配置页按 `u` / `Delete` | 点击 `REMOVE` / `移除` |
 | 停止开发服务 | `d` | 点击 `SERVICE` |
 | 停止隧道 | `t` | 点击 `TUNNEL` |
 | 停止整个组 | `x` | 点击 `GROUP` |
@@ -62,7 +66,13 @@ npx strayd
 
 ## 持久化配置
 
-Strayd 使用 TOML 配置文件。先生成带注释的模板：
+Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。进入顶部 `CONFIG` / `隐藏配置` 页可以查看并移除已有规则。修改会立即写入配置文件并刷新界面。
+
+<p align="center">
+  <img src="docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
+</p>
+
+也可以直接维护 TOML。先生成带注释的模板：
 
 ```bash
 strayd config init
@@ -80,6 +90,7 @@ strayd config show
 
 ```toml
 version = 1
+language = "auto"
 
 [[display.hide]]
 ports = [22]
@@ -103,12 +114,28 @@ runtimes = ["sshd"]
 | `commands` | 完整命令行，忽略大小写的包含匹配 |
 | `ids` | Strayd 资源 ID，忽略大小写的精确匹配 |
 
-规则同时作用于 TUI、`list` 和 `stop`。临时绕过配置可使用 `--no-config`；指定其他文件可使用 `--config <PATH>`：
+规则同时作用于 TUI、`list` 和 `stop`。临时绕过配置可使用 `--no-config`；此时 TUI 配置页为只读。指定其他文件可使用 `--config <PATH>`：
 
 ```bash
 strayd --no-config
 strayd --config ./team-strayd.toml list
 ```
+
+## 语言
+
+`language = "auto"` 会优先读取系统 locale；`C`、`POSIX` 等中性 locale 再通过系统时区判断，仍无法判断时使用英文。配置和命令行都可以显式固定语言：
+
+```toml
+language = "zh-cn" # 或 "en"
+```
+
+```bash
+strayd --language zh-cn
+strayd --language en
+strayd --language auto
+```
+
+优先级为 `--language` > 配置文件 > 系统语言/时区。JSON 字段、命令名、筛选参数和运行时标识保持不变，便于脚本稳定使用。
 
 ## CLI
 
@@ -116,6 +143,7 @@ strayd --config ./team-strayd.toml list
 
 ```bash
 strayd list
+strayd --language en list
 strayd list --kind tunnel --json
 strayd list --platform linux --port 5000
 strayd stop tunnel --port 5000 --dry-run

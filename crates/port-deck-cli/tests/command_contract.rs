@@ -1,12 +1,14 @@
 use clap::Parser;
 use port_deck_cli::{
-    Cli, Command, ConfigAction, DisplayConfig, Filters, HideRule, PlanError, PlatformFilter,
-    StopTarget, StraydConfig, apply_visibility_config, build_stop_plan, initialize_config,
-    load_config, parse_config,
+    Cli, Command, ConfigAction, DisplayConfig, Filters, HideField, HideRule, Language,
+    LanguageSetting, PlanError, PlatformFilter, StopTarget, StraydConfig, Translator,
+    apply_visibility_config, build_stop_plan, initialize_config, load_config, parse_config,
+    resolve_language, save_config,
 };
 use port_deck_core::{
     HostPlatform, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess, TunnelTarget,
 };
+use port_deck_engine::EngineError;
 
 #[test]
 fn parses_tunnel_stop_with_host_platform_filter_and_safety_flags() {
@@ -173,6 +175,7 @@ fn parses_a_versioned_toml_visibility_configuration() {
     let config = parse_config(
         r#"
 version = 1
+language = "zh-cn"
 
 [[display.hide]]
 ports = [22, 5432]
@@ -189,6 +192,7 @@ kinds = ["system"]
 
     let rule = &config.display.hide[0];
     assert_eq!(config.version, 1);
+    assert_eq!(config.language, LanguageSetting::ZhCn);
     assert_eq!(rule.ports, [22, 5432]);
     assert_eq!(rule.runtimes, ["sshd"]);
     assert_eq!(rule.process_names, ["openssh"]);
@@ -197,6 +201,79 @@ kinds = ["system"]
     assert_eq!(rule.ids, ["linux:42:100"]);
     assert_eq!(rule.kinds.len(), 1);
     assert_eq!(rule.platforms.len(), 1);
+}
+
+#[test]
+fn resolves_language_by_override_config_locale_timezone_then_english() {
+    assert_eq!(
+        resolve_language(
+            Some(LanguageSetting::ZhCn),
+            LanguageSetting::Auto,
+            Some("en-US"),
+            Some("America/New_York"),
+        ),
+        Language::ZhCn,
+    );
+    assert_eq!(
+        resolve_language(
+            None,
+            LanguageSetting::English,
+            Some("zh_CN.UTF-8"),
+            Some("Asia/Shanghai"),
+        ),
+        Language::English,
+    );
+    assert_eq!(
+        resolve_language(
+            None,
+            LanguageSetting::Auto,
+            Some("zh-Hans-CN"),
+            Some("Europe/London"),
+        ),
+        Language::ZhCn,
+    );
+    assert_eq!(
+        resolve_language(
+            None,
+            LanguageSetting::Auto,
+            Some("en-GB"),
+            Some("Asia/Shanghai"),
+        ),
+        Language::English,
+    );
+    assert_eq!(
+        resolve_language(
+            None,
+            LanguageSetting::Auto,
+            Some("C.UTF-8"),
+            Some("Asia/Hong_Kong"),
+        ),
+        Language::ZhCn,
+    );
+    assert_eq!(
+        resolve_language(None, LanguageSetting::Auto, None, Some("UTC")),
+        Language::English,
+    );
+}
+
+#[test]
+fn english_locale_messages_do_not_fall_back_to_chinese() {
+    let translator = Translator::new(Language::English);
+    let output = [
+        translator.no_matching_resources().to_string(),
+        translator.scan_status(2, 3, 1, 4),
+        translator.stopped(2),
+        translator.plan_error(&PlanError::MultipleMatches(3)),
+        translator.engine_error(&EngineError::ProtectedSshd),
+    ]
+    .join("\n");
+
+    assert!(output.contains("No resources matched"));
+    assert!(
+        !output
+            .chars()
+            .any(|character| ('\u{4e00}'..='\u{9fff}').contains(&character))
+    );
 }
 
 #[test]
@@ -229,6 +306,40 @@ fn initializes_and_loads_a_persistent_config_without_overwriting_by_default() {
 }
 
 #[test]
+fn builds_and_persists_a_general_hide_rule_from_a_detected_service() {
+    let mut source = service(8100, ResourceKind::System, RuntimeKind::Sshd, 22);
+    source.process_name = "sshd".into();
+    let rule = HideRule::from_service(
+        &source,
+        &[HideField::Port, HideField::Runtime, HideField::Project],
+    )
+    .expect("selected fields should build a rule");
+    assert_eq!(rule.ports, [22]);
+    assert_eq!(rule.runtimes, ["sshd"]);
+    assert_eq!(rule.projects, ["shop"]);
+
+    let directory = std::env::temp_dir().join(format!(
+        "strayd-config-save-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be available")
+            .as_nanos()
+    ));
+    let path = directory.join("config.toml");
+    let mut config = StraydConfig::default();
+    config.display.hide.push(rule.clone());
+
+    save_config(&path, &config).expect("TUI config changes should persist");
+    assert_eq!(
+        load_config(&path).expect("saved config should load"),
+        config
+    );
+
+    std::fs::remove_dir_all(&directory).expect("temporary config should be removed");
+}
+
+#[test]
 fn parses_config_commands_and_global_config_overrides() {
     let cli = Cli::try_parse_from([
         "strayd",
@@ -248,6 +359,14 @@ fn parses_config_commands_and_global_config_overrides() {
         cli.command,
         Some(Command::Config(args)) if matches!(args.action, ConfigAction::Init { force: true })
     ));
+}
+
+#[test]
+fn parses_a_global_language_override() {
+    let cli = Cli::try_parse_from(["strayd", "--language", "zh-cn", "list"])
+        .expect("language override should parse");
+
+    assert_eq!(cli.language, Some(LanguageSetting::ZhCn));
 }
 
 fn linked_group(protected: bool) -> ResourceGroup {

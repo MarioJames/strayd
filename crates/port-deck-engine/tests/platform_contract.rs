@@ -1,5 +1,5 @@
 use port_deck_core::HostPlatform;
-use port_deck_engine::{TerminateRequest, host_platform, terminate};
+use port_deck_engine::{EngineError, TerminateRequest, host_platform, terminate};
 
 #[test]
 fn selects_the_scanner_for_the_compile_target() {
@@ -29,5 +29,5 @@ fn refuses_a_resource_from_another_host_platform() {
     })
     .expect_err("cross-platform termination must be rejected before touching a process");
 
-    assert!(error.contains("不属于当前宿主平台"));
+    assert_eq!(error, EngineError::WrongPlatform);
 }

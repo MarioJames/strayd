@@ -7,9 +7,14 @@ use directories::BaseDirs;
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, RuntimeKind, ServiceProcess};
 use serde::{Deserialize, Serialize};
 
+mod i18n;
+
+pub use i18n::{Language, Translator};
+
 pub const DEFAULT_CONFIG_TOML: &str = r#"# Strayd configuration
 # Rules are ORed; fields inside one rule are ANDed.
 version = 1
+language = "auto"
 
 # Example: hide only the sshd resource listening on port 22.
 # [[display.hide]]
@@ -26,6 +31,10 @@ version = 1
     about = "Manage local development services and tunnels"
 )]
 pub struct Cli {
+    /// Override the display language (auto, en, or zh-cn)
+    #[arg(long, global = true, value_enum)]
+    pub language: Option<LanguageSetting>,
+
     /// Use a specific configuration file
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -75,6 +84,7 @@ pub enum ConfigAction {
 pub struct StraydConfig {
     #[serde(default = "current_config_version")]
     pub version: u32,
+    pub language: LanguageSetting,
     pub display: DisplayConfig,
 }
 
@@ -82,9 +92,23 @@ impl Default for StraydConfig {
     fn default() -> Self {
         Self {
             version: current_config_version(),
+            language: LanguageSetting::Auto,
             display: DisplayConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum LanguageSetting {
+    #[default]
+    Auto,
+    #[value(name = "en", alias = "en-us")]
+    #[serde(rename = "en", alias = "en-us")]
+    English,
+    #[value(name = "zh-cn", alias = "zh")]
+    #[serde(rename = "zh-cn", alias = "zh")]
+    ZhCn,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +128,18 @@ pub struct HideRule {
     pub projects: Vec<String>,
     pub commands: Vec<String>,
     pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HideField {
+    Port,
+    Runtime,
+    Kind,
+    Platform,
+    ProcessName,
+    Project,
+    Command,
+    Id,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,20 +162,20 @@ pub enum ConfigPlatform {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("无法确定当前用户的配置目录")]
+    #[error("config_directory_unavailable")]
     DirectoryUnavailable,
-    #[error("无法读取配置 {path}: {source}")]
+    #[error("config_read_failed: {path}: {source}")]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("无法解析配置 {path}: {message}")]
+    #[error("config_parse_failed: {path}: {message}")]
     Parse { path: PathBuf, message: String },
-    #[error("不支持配置版本 {0}；当前仅支持版本 1")]
+    #[error("config_version_unsupported: {0}")]
     UnsupportedVersion(u32),
-    #[error("配置文件已存在：{0}；如需覆盖请传入 --force")]
+    #[error("config_already_exists: {0}")]
     AlreadyExists(PathBuf),
-    #[error("无法写入配置 {path}: {source}")]
+    #[error("config_write_failed: {path}: {source}")]
     Write {
         path: PathBuf,
         source: std::io::Error,
@@ -222,6 +258,89 @@ pub fn initialize_config(path: &Path, force: bool) -> Result<(), ConfigError> {
         })
 }
 
+pub fn save_config(path: &Path, config: &StraydConfig) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    let contents = format_config(config)?;
+    fs::write(path, contents).map_err(|source| ConfigError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+pub fn resolve_language(
+    override_setting: Option<LanguageSetting>,
+    configured: LanguageSetting,
+    system_locale: Option<&str>,
+    system_timezone: Option<&str>,
+) -> Language {
+    let setting = override_setting.unwrap_or(configured);
+    match setting {
+        LanguageSetting::English => Language::English,
+        LanguageSetting::ZhCn => Language::ZhCn,
+        LanguageSetting::Auto => detect_language(system_locale, system_timezone),
+    }
+}
+
+pub fn resolve_system_language(
+    override_setting: Option<LanguageSetting>,
+    configured: LanguageSetting,
+) -> Language {
+    let locale = sys_locale::get_locale();
+    let timezone = iana_time_zone::get_timezone().ok();
+    resolve_language(
+        override_setting,
+        configured,
+        locale.as_deref(),
+        timezone.as_deref(),
+    )
+}
+
+fn detect_language(system_locale: Option<&str>, system_timezone: Option<&str>) -> Language {
+    if let Some(locale) = system_locale
+        .map(str::trim)
+        .filter(|locale| !locale.is_empty())
+    {
+        let normalized = locale
+            .split(['.', '@'])
+            .next()
+            .unwrap_or(locale)
+            .replace('_', "-")
+            .to_ascii_lowercase();
+        if normalized == "zh" || normalized.starts_with("zh-") {
+            return Language::ZhCn;
+        }
+        if !matches!(normalized.as_str(), "c" | "posix") {
+            return Language::English;
+        }
+    }
+
+    let chinese_timezone = system_timezone.is_some_and(|timezone| {
+        matches!(
+            timezone.to_ascii_lowercase().as_str(),
+            "asia/shanghai"
+                | "asia/chongqing"
+                | "asia/harbin"
+                | "asia/urumqi"
+                | "asia/hong_kong"
+                | "asia/macau"
+                | "asia/taipei"
+                | "prc"
+                | "hongkong"
+                | "roc"
+        )
+    });
+    if chinese_timezone {
+        Language::ZhCn
+    } else {
+        Language::English
+    }
+}
+
 pub fn apply_visibility_config(
     groups: &[ResourceGroup],
     config: &StraydConfig,
@@ -245,16 +364,49 @@ pub fn apply_visibility_config(
 }
 
 impl HideRule {
-    fn matches(&self, service: &ServiceProcess) -> bool {
-        let has_matcher = !self.ports.is_empty()
+    pub fn from_service(service: &ServiceProcess, fields: &[HideField]) -> Option<Self> {
+        let mut rule = Self::default();
+        for field in fields {
+            match field {
+                HideField::Port => {
+                    rule.ports.extend(service.ports.iter().copied());
+                    if let Some(target) = &service.tunnel_target {
+                        rule.ports.push(target.port);
+                    }
+                    rule.ports.sort_unstable();
+                    rule.ports.dedup();
+                }
+                HideField::Runtime => rule.runtimes.push(runtime_slug(&service.runtime).into()),
+                HideField::Kind => rule
+                    .kinds
+                    .push(ConfigResourceKind::from(&service.resource_kind)),
+                HideField::Platform => rule.platforms.push(ConfigPlatform::from(service.platform)),
+                HideField::ProcessName => rule.process_names.push(service.process_name.clone()),
+                HideField::Project => {
+                    if let Some(project) = service.project_name.as_ref().or(service.cwd.as_ref()) {
+                        rule.projects.push(project.clone());
+                    }
+                }
+                HideField::Command => rule.commands.push(service.command.clone()),
+                HideField::Id => rule.ids.push(service.id.clone()),
+            }
+        }
+        rule.has_matcher().then_some(rule)
+    }
+
+    pub fn has_matcher(&self) -> bool {
+        !self.ports.is_empty()
             || !self.runtimes.is_empty()
             || !self.kinds.is_empty()
             || !self.platforms.is_empty()
             || !self.process_names.is_empty()
             || !self.projects.is_empty()
             || !self.commands.is_empty()
-            || !self.ids.is_empty();
-        has_matcher
+            || !self.ids.is_empty()
+    }
+
+    fn matches(&self, service: &ServiceProcess) -> bool {
+        self.has_matcher()
             && (self.ports.is_empty()
                 || self
                     .ports
@@ -297,6 +449,27 @@ impl HideRule {
                         .as_deref()
                         .is_some_and(|value| contains_case_insensitive(value, expected))
             })
+    }
+}
+
+impl From<&ResourceKind> for ConfigResourceKind {
+    fn from(kind: &ResourceKind) -> Self {
+        match kind {
+            ResourceKind::Development => Self::Dev,
+            ResourceKind::Tunnel => Self::Tunnel,
+            ResourceKind::System => Self::System,
+            ResourceKind::Other => Self::Other,
+        }
+    }
+}
+
+impl From<HostPlatform> for ConfigPlatform {
+    fn from(platform: HostPlatform) -> Self {
+        match platform {
+            HostPlatform::Windows => Self::Windows,
+            HostPlatform::Linux => Self::Linux,
+            HostPlatform::MacOs => Self::Macos,
+        }
     }
 }
 
@@ -373,6 +546,7 @@ pub enum TabTarget {
     Dev,
     Tunnels,
     System,
+    Config,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -459,11 +633,11 @@ pub enum PlatformFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PlanError {
-    #[error("没有资源匹配当前筛选条件")]
+    #[error("plan_no_matches")]
     NoMatches,
-    #[error("匹配到 {0} 项；批量操作需要显式传入 --all")]
+    #[error("plan_multiple_matches: {0}")]
     MultipleMatches(usize),
-    #[error("资源组 {0} 包含受保护服务，拒绝整组关闭")]
+    #[error("plan_protected_group: {0}")]
     ProtectedGroup(String),
 }
 

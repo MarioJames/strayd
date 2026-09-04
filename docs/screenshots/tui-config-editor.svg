@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Strayd TUI 隐藏规则编辑器</title>
+  <desc id="desc">在中文界面中为 22 端口的 sshd 勾选端口和运行时字段，并保存为持久化隐藏规则。</desc>
+  <rect width="1200" height="650" rx="24" fill="#070b12"/>
+  <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
+  <text x="46" y="37" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">STRAYD / 终端控制台</text>
+  <rect x="36" y="42" width="218" height="26" rx="5" fill="#3dd6d0"/>
+  <text x="145" y="61" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">1   全部</text>
+  <text x="374" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2   开发服务</text>
+  <text x="604" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">3   公网隧道</text>
+  <text x="834" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">4   系统服务</text>
+  <text x="1060" y="61" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">5   隐藏配置</text>
+
+  <rect x="24" y="92" width="430" height="474" rx="12" fill="#0b1019" stroke="#354050" opacity="0.72"/>
+  <text x="48" y="126" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">资源 / 4</text>
+  <rect x="40" y="148" width="398" height="74" rx="8" fill="#19283a"/>
+  <rect x="40" y="148" width="5" height="74" rx="2" fill="#3dd6d0"/>
+  <text x="60" y="180" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">:22</text>
+  <text x="144" y="180" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">sshd</text>
+  <text x="60" y="207" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">1 项</text>
+  <rect x="470" y="92" width="706" height="474" rx="12" fill="#0b1019" stroke="#ab72ff" opacity="0.72"/>
+  <text x="494" y="126" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">关联与进程详情</text>
+  <text x="494" y="172" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">本地 :22 / sshd</text>
+
+  <rect x="216" y="108" width="768" height="438" rx="13" fill="#0f141f" stroke="#ab72ff" stroke-width="3"/>
+  <text x="600" y="145" text-anchor="middle" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">创建隐藏规则</text>
+  <text x="600" y="181" text-anchor="middle" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700">隐藏 sshd，端口 22</text>
+
+  <rect x="252" y="205" width="696" height="36" rx="5" fill="#3dd6d0"/>
+  <text x="274" y="229" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="700">[x]  端口             22</text>
+  <text x="274" y="271" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">[x]  运行时           sshd</text>
+  <text x="274" y="309" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">[ ]  类型             system</text>
+  <text x="274" y="347" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">[ ]  平台             linux</text>
+  <text x="274" y="385" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">[ ]  进程名           sshd</text>
+  <text x="274" y="423" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16">[ ]  项目             不可用</text>
+  <text x="600" y="463" text-anchor="middle" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">↑/↓ 选择 · Space 勾选 · Enter 保存 · Esc 取消</text>
+  <rect x="728" y="486" width="220" height="36" rx="5" fill="#ab72ff"/>
+  <text x="838" y="510" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">ENTER / 确认</text>
+  <rect x="252" y="486" width="220" height="36" rx="5" fill="#758097"/>
+  <text x="362" y="510" text-anchor="middle" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">ESC / 取消</text>
+
+  <rect x="24" y="586" width="126" height="34" rx="5" fill="#3dd6d0"/><text x="42" y="609" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">h     隐藏</text>
+  <text x="174" y="609" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">配置会立即写入 config.toml，并在保存后刷新资源列表</text>
+</svg>
