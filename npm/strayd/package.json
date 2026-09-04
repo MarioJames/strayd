@@ -1,8 +1,14 @@
 {
   "name": "strayd",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cross-platform TUI and commands for managing local development services and tunnels",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MarioJames/strayd.git"
+  },
+  "homepage": "https://github.com/MarioJames/strayd#readme",
+  "bugs": "https://github.com/MarioJames/strayd/issues",
   "bin": {
     "strayd": "bin/strayd.cjs"
   },

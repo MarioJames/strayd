@@ -1,12 +1,18 @@
 use std::io::{self, IsTerminal, Stdout};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use port_deck_cli::{Filters, StopTarget, TabTarget, TuiArgs, build_stop_plan, runtime_slug};
+use port_deck_cli::{
+    Filters, StopTarget, StraydConfig, TabTarget, TuiArgs, apply_visibility_config,
+    build_stop_plan, runtime_slug,
+};
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
 use ratatui::Terminal;
@@ -26,14 +32,14 @@ const SELECTED: Color = Color::Rgb(25, 40, 58);
 const WARNING: Color = Color::Rgb(247, 190, 77);
 const DANGER: Color = Color::Rgb(255, 101, 124);
 
-pub fn run(args: TuiArgs) -> Result<(), String> {
+pub fn run(args: TuiArgs, config: StraydConfig) -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("TUI 需要交互终端；脚本中请使用 list 或 stop 子命令".into());
     }
 
     enable_raw_mode().map_err(|error| format!("无法进入终端 raw mode: {error}"))?;
     let mut stdout = io::stdout();
-    if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+    if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
         let _ = disable_raw_mode();
         return Err(format!("无法进入终端备用屏幕: {error}"));
     }
@@ -41,20 +47,24 @@ pub fn run(args: TuiArgs) -> Result<(), String> {
         Ok(terminal) => terminal,
         Err(error) => {
             let _ = disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
             return Err(format!("无法创建终端界面: {error}"));
         }
     };
 
-    let result = App::new(args).and_then(|mut app| app.run(&mut terminal));
+    let result = App::new(args, config).and_then(|mut app| app.run(&mut terminal));
     let cleanup_result = restore_terminal(&mut terminal);
     result.and(cleanup_result)
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), String> {
     disable_raw_mode().map_err(|error| format!("无法恢复终端模式: {error}"))?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .map_err(|error| format!("无法离开终端备用屏幕: {error}"))?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+    .map_err(|error| format!("无法离开终端备用屏幕: {error}"))?;
     terminal
         .show_cursor()
         .map_err(|error| format!("无法恢复终端光标: {error}"))
@@ -62,13 +72,39 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 struct App {
     snapshot: ScanSnapshot,
+    config: StraydConfig,
     tab: TabTarget,
     selected: usize,
+    list_offset: usize,
+    hidden_count: usize,
+    regions: UiRegions,
     pending: Option<PendingStop>,
     status: String,
     refresh_every: Option<Duration>,
     last_refresh: Instant,
     should_quit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseAction {
+    SetTab(TabTarget),
+    Select(usize),
+    StopDev,
+    StopTunnel,
+    StopGroup,
+    Refresh,
+    Quit,
+    Confirm,
+    Cancel,
+}
+
+#[derive(Debug, Clone)]
+struct UiRegions {
+    tabs: Vec<(Rect, TabTarget)>,
+    list: Rect,
+    footer_actions: Vec<(Rect, MouseAction)>,
+    confirm: Rect,
+    cancel: Rect,
 }
 
 struct PendingStop {
@@ -77,13 +113,17 @@ struct PendingStop {
 }
 
 impl App {
-    fn new(args: TuiArgs) -> Result<Self, String> {
-        let snapshot = scan_all();
-        let status = scan_status(&snapshot);
+    fn new(args: TuiArgs, config: StraydConfig) -> Result<Self, String> {
+        let (snapshot, hidden_count) = scan_visible(&config);
+        let status = scan_status(&snapshot, hidden_count);
         Ok(Self {
             snapshot,
+            config,
             tab: args.tab,
             selected: 0,
+            list_offset: 0,
+            hidden_count,
+            regions: UiRegions::new(Rect::default()),
             pending: None,
             status,
             refresh_every: (args.refresh > 0).then(|| Duration::from_secs(args.refresh)),
@@ -100,11 +140,12 @@ impl App {
 
             if event::poll(Duration::from_millis(200))
                 .map_err(|error| format!("无法读取终端事件: {error}"))?
-                && let Event::Key(key) =
-                    event::read().map_err(|error| format!("无法读取按键: {error}"))?
-                && key.kind == KeyEventKind::Press
             {
-                self.handle_key(key);
+                match event::read().map_err(|error| format!("无法读取终端事件: {error}"))? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+                    Event::Mouse(mouse) => self.handle_mouse(mouse),
+                    _ => {}
+                }
             }
             if self
                 .refresh_every
@@ -154,11 +195,47 @@ impl App {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollDown if self.pending.is_none() => self.select_next(),
+            MouseEventKind::ScrollUp if self.pending.is_none() => self.select_previous(),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let visible_len = self.visible_group_indices().len();
+                if let Some(action) = self.regions.action_at(
+                    mouse,
+                    self.list_offset,
+                    visible_len,
+                    self.pending.is_some(),
+                ) {
+                    self.handle_mouse_action(action);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_mouse_action(&mut self, action: MouseAction) {
+        match action {
+            MouseAction::SetTab(tab) => self.set_tab(tab),
+            MouseAction::Select(index) => self.selected = index,
+            MouseAction::StopDev => self.prepare_stop(StopTarget::Dev, "开发服务"),
+            MouseAction::StopTunnel => self.prepare_stop(StopTarget::Tunnel, "隧道"),
+            MouseAction::StopGroup => self.prepare_stop(StopTarget::Group, "整个关联组"),
+            MouseAction::Refresh => self.refresh(),
+            MouseAction::Quit => self.should_quit = true,
+            MouseAction::Confirm => self.confirm_pending(),
+            MouseAction::Cancel => {
+                self.pending = None;
+                self.status = "已取消关闭操作".into();
+            }
+        }
+    }
+
     fn refresh(&mut self) {
         let selected_id = self.selected_group().map(|group| group.id.clone());
-        self.snapshot = scan_all();
+        (self.snapshot, self.hidden_count) = scan_visible(&self.config);
         self.last_refresh = Instant::now();
-        self.status = scan_status(&self.snapshot);
+        self.status = scan_status(&self.snapshot, self.hidden_count);
         let visible = self.visible_group_indices();
         self.selected = selected_id
             .and_then(|id| {
@@ -213,6 +290,7 @@ impl App {
             TabTarget::System => TabTarget::All,
         };
         self.selected = 0;
+        self.list_offset = 0;
     }
 
     fn previous_tab(&mut self) {
@@ -223,11 +301,13 @@ impl App {
             TabTarget::System => TabTarget::Tunnels,
         };
         self.selected = 0;
+        self.list_offset = 0;
     }
 
     fn set_tab(&mut self, tab: TabTarget) {
         self.tab = tab;
         self.selected = 0;
+        self.list_offset = 0;
     }
 
     fn select_next(&mut self) {
@@ -261,7 +341,7 @@ impl App {
             .and_then(|index| self.snapshot.groups.get(*index))
     }
 
-    fn draw(&self, frame: &mut ratatui::Frame) {
+    fn draw(&mut self, frame: &mut ratatui::Frame) {
         let area = frame.area();
         let sections = Layout::vertical([
             Constraint::Length(3),
@@ -269,6 +349,7 @@ impl App {
             Constraint::Length(2),
         ])
         .split(area);
+        self.regions = UiRegions::new(area);
 
         self.draw_tabs(frame, sections[0]);
         self.draw_content(frame, sections[1]);
@@ -302,7 +383,7 @@ impl App {
         frame.render_widget(tabs, area);
     }
 
-    fn draw_content(&self, frame: &mut ratatui::Frame, area: Rect) {
+    fn draw_content(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let columns = Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
             .split(area);
         let visible = self.visible_group_indices();
@@ -324,9 +405,11 @@ impl App {
                     .bg(SELECTED)
                     .add_modifier(Modifier::BOLD),
             );
-        let mut state =
-            ListState::default().with_selected((!visible.is_empty()).then_some(self.selected));
+        let mut state = ListState::default()
+            .with_selected((!visible.is_empty()).then_some(self.selected))
+            .with_offset(self.list_offset);
         frame.render_stateful_widget(list, columns[0], &mut state);
+        self.list_offset = state.offset();
 
         let detail = self
             .selected_group()
@@ -344,22 +427,35 @@ impl App {
     }
 
     fn draw_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let help = Line::from(vec![
-            key("Tab"),
-            text(" 切页  "),
-            key("j/k"),
-            text(" 选择  "),
-            key("d"),
-            text(" 服务  "),
-            key("t"),
-            text(" 隧道  "),
-            key("x"),
-            text(" 整组  "),
-            key("r"),
-            text(" 刷新  "),
-            key("q"),
-            text(" 退出"),
-        ]);
+        let action_row = Rect::new(area.x, area.y, area.width, 1);
+        let action_areas = footer_action_areas(action_row);
+        for (index, (label, key_label, danger)) in [
+            ("SERVICE", "d", true),
+            ("TUNNEL", "t", true),
+            ("GROUP", "x", true),
+            ("REFRESH", "r", false),
+            ("QUIT", "q", false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let color = if danger { DANGER } else { CYAN };
+            let button = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" {key_label} "),
+                    Style::default().fg(Color::Black).bg(color).bold(),
+                ),
+                Span::styled(format!(" {label}"), Style::default().fg(color)),
+            ]));
+            frame.render_widget(button, action_areas[index]);
+        }
+        if let Some(hint_area) = action_areas.get(5) {
+            frame.render_widget(
+                Paragraph::new("mouse: tabs · rows · actions · wheel")
+                    .style(Style::default().fg(MUTED)),
+                *hint_area,
+            );
+        }
         let status = Line::from(Span::styled(
             format!("  {}", self.status),
             Style::default().fg(if self.snapshot.warnings.is_empty() {
@@ -368,12 +464,12 @@ impl App {
                 WARNING
             }),
         ));
-        let footer = Paragraph::new(vec![help, status]);
-        frame.render_widget(footer, area);
+        let status_area = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
+        frame.render_widget(Paragraph::new(status), status_area);
     }
 
     fn draw_confirmation(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingStop) {
-        let popup = centered_rect(58, 7, area);
+        let popup = centered_rect(58, 9, area);
         frame.render_widget(Clear, popup);
         let text = Text::from(vec![
             Line::from(Span::styled(
@@ -391,7 +487,143 @@ impl App {
                 .style(Style::default().bg(PANEL)),
         );
         frame.render_widget(paragraph, popup);
+        let [confirm, cancel] = confirmation_button_areas(popup);
+        frame.render_widget(
+            Paragraph::new(" ENTER / CONFIRM ")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(DANGER).bold()),
+            confirm,
+        );
+        frame.render_widget(
+            Paragraph::new(" ESC / CANCEL ")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(MUTED).bold()),
+            cancel,
+        );
     }
+}
+
+impl UiRegions {
+    fn new(area: Rect) -> Self {
+        let [tabs_area, content_area, footer_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .areas(area);
+        let [list_column, _] =
+            Layout::horizontal([Constraint::Percentage(43), Constraint::Percentage(57)])
+                .areas(content_area);
+        let list = Rect::new(
+            list_column.x.saturating_add(2),
+            list_column.y.saturating_add(1),
+            list_column.width.saturating_sub(4),
+            list_column.height.saturating_sub(2),
+        );
+        let tab_y = tabs_area.y.saturating_add(1);
+        let mut tab_x = tabs_area.x.saturating_add(1);
+        let tabs = [
+            (5, TabTarget::All),
+            (5, TabTarget::Dev),
+            (9, TabTarget::Tunnels),
+            (8, TabTarget::System),
+        ]
+        .into_iter()
+        .map(|(width, tab)| {
+            let rect = Rect::new(tab_x, tab_y, width, 1);
+            tab_x = tab_x.saturating_add(width + 2);
+            (rect, tab)
+        })
+        .collect();
+        let action_row = Rect::new(footer_area.x, footer_area.y, footer_area.width, 1);
+        let footer_areas = footer_action_areas(action_row);
+        let footer_actions = [
+            MouseAction::StopDev,
+            MouseAction::StopTunnel,
+            MouseAction::StopGroup,
+            MouseAction::Refresh,
+            MouseAction::Quit,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| (footer_areas[index], action))
+        .collect();
+        let popup = centered_rect(58, 9, area);
+        let [confirm, cancel] = confirmation_button_areas(popup);
+        Self {
+            tabs,
+            list,
+            footer_actions,
+            confirm,
+            cancel,
+        }
+    }
+
+    fn action_at(
+        &self,
+        mouse: MouseEvent,
+        list_offset: usize,
+        visible_len: usize,
+        confirmation_open: bool,
+    ) -> Option<MouseAction> {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return None;
+        }
+        if confirmation_open {
+            return rect_contains(self.confirm, mouse.column, mouse.row)
+                .then_some(MouseAction::Confirm)
+                .or_else(|| {
+                    rect_contains(self.cancel, mouse.column, mouse.row)
+                        .then_some(MouseAction::Cancel)
+                });
+        }
+        if let Some((_, tab)) = self
+            .tabs
+            .iter()
+            .find(|(area, _)| rect_contains(*area, mouse.column, mouse.row))
+        {
+            return Some(MouseAction::SetTab(*tab));
+        }
+        if rect_contains(self.list, mouse.column, mouse.row) {
+            let item = list_offset + usize::from(mouse.row.saturating_sub(self.list.y) / 2);
+            return (item < visible_len).then_some(MouseAction::Select(item));
+        }
+        self.footer_actions
+            .iter()
+            .find(|(area, _)| rect_contains(*area, mouse.column, mouse.row))
+            .map(|(_, action)| *action)
+    }
+}
+
+fn footer_action_areas(area: Rect) -> [Rect; 6] {
+    Layout::horizontal([
+        Constraint::Length(11),
+        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(11),
+        Constraint::Length(8),
+        Constraint::Min(0),
+    ])
+    .areas(area)
+}
+
+fn confirmation_button_areas(popup: Rect) -> [Rect; 2] {
+    let row = Rect::new(popup.x, popup.y.saturating_add(6), popup.width, 1);
+    let [confirm, _, cancel] = Layout::horizontal([
+        Constraint::Length(18),
+        Constraint::Length(2),
+        Constraint::Length(18),
+    ])
+    .flex(Flex::Center)
+    .areas(row);
+    [confirm, cancel]
+}
+
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
 }
 
 fn tab_matches(tab: TabTarget, group: &ResourceGroup) -> bool {
@@ -571,20 +803,37 @@ fn scope_label(service: &ServiceProcess) -> String {
     }
 }
 
-fn scan_status(snapshot: &ScanSnapshot) -> String {
+fn scan_visible(config: &StraydConfig) -> (ScanSnapshot, usize) {
+    let mut snapshot = scan_all();
+    let total = resource_count(&snapshot.groups);
+    snapshot.groups = apply_visibility_config(&snapshot.groups, config);
+    let hidden = total.saturating_sub(resource_count(&snapshot.groups));
+    (snapshot, hidden)
+}
+
+fn resource_count(groups: &[ResourceGroup]) -> usize {
+    groups.iter().map(|group| group.services.len()).sum()
+}
+
+fn scan_status(snapshot: &ScanSnapshot, hidden_count: usize) -> String {
     let resources = snapshot
         .groups
         .iter()
         .map(|group| group.services.len())
         .sum::<usize>();
+    let hidden = if hidden_count > 0 {
+        format!(" · {hidden_count} hidden by config")
+    } else {
+        String::new()
+    };
     if snapshot.warnings.is_empty() {
         format!(
-            "{} groups / {resources} resources · scan ready",
-            snapshot.groups.len()
+            "{} groups / {resources} resources · scan ready{hidden}",
+            snapshot.groups.len(),
         )
     } else {
         format!(
-            "{} groups / {resources} resources · {} warnings",
+            "{} groups / {resources} resources · {} warnings{hidden}",
             snapshot.groups.len(),
             snapshot.warnings.len()
         )
@@ -601,20 +850,6 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     horizontal
 }
 
-fn key(value: &'static str) -> Span<'static> {
-    Span::styled(
-        value,
-        Style::default()
-            .fg(Color::Black)
-            .bg(CYAN)
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
-fn text(value: &'static str) -> Span<'static> {
-    Span::styled(value, Style::default().fg(MUTED))
-}
-
 fn is_quit_key(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('q')
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -622,9 +857,13 @@ fn is_quit_key(key: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use ratatui::layout::Rect;
 
-    use super::is_quit_key;
+    use super::{MouseAction, UiRegions, is_quit_key};
+    use port_deck_cli::TabTarget;
 
     #[test]
     fn plain_q_and_control_c_are_quit_keys() {
@@ -640,5 +879,55 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::NONE
         )));
+    }
+
+    #[test]
+    fn mouse_clicks_map_to_tabs_rows_and_footer_actions() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30));
+
+        assert_eq!(
+            regions.action_at(mouse_down(3, 1), 0, 8, false),
+            Some(MouseAction::SetTab(TabTarget::All))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(17, 1), 0, 8, false),
+            Some(MouseAction::SetTab(TabTarget::Tunnels))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(8, 8), 2, 8, false),
+            Some(MouseAction::Select(4))
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(13, 28), 0, 8, false),
+            Some(MouseAction::StopTunnel)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(45, 28), 0, 8, false),
+            Some(MouseAction::Quit)
+        );
+    }
+
+    #[test]
+    fn confirmation_dialog_captures_mouse_clicks() {
+        let regions = UiRegions::new(Rect::new(0, 0, 100, 30));
+
+        assert_eq!(
+            regions.action_at(mouse_down(38, 17), 0, 8, true),
+            Some(MouseAction::Confirm)
+        );
+        assert_eq!(
+            regions.action_at(mouse_down(57, 17), 0, 8, true),
+            Some(MouseAction::Cancel)
+        );
+        assert_eq!(regions.action_at(mouse_down(3, 1), 0, 8, true), None);
+    }
+
+    fn mouse_down(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 }

@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use port_deck_cli::{
-    Cli, Command, ListArgs, StopArgs, TuiArgs, build_stop_plan, filter_groups, runtime_slug,
+    Cli, Command, ConfigAction, ConfigArgs, ListArgs, StopArgs, StraydConfig, TuiArgs,
+    apply_visibility_config, build_stop_plan, filter_groups, format_config, initialize_config,
+    load_config, resolve_config_path, runtime_slug,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -22,17 +24,48 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
+    let config_path =
+        resolve_config_path(cli.config.as_deref()).map_err(|error| error.to_string())?;
+    if let Some(Command::Config(args)) = &cli.command {
+        return config(args.clone(), &config_path);
+    }
+    let config = if cli.no_config {
+        StraydConfig::default()
+    } else {
+        load_config(&config_path).map_err(|error| error.to_string())?
+    };
+
     match cli.command {
-        None => tui::run(TuiArgs::default()),
-        Some(Command::Tui(args)) => tui::run(args),
-        Some(Command::List(args)) => list(args),
-        Some(Command::Stop(args)) => stop(args),
+        None => tui::run(TuiArgs::default(), config),
+        Some(Command::Tui(args)) => tui::run(args, config),
+        Some(Command::List(args)) => list(args, &config),
+        Some(Command::Stop(args)) => stop(args, &config),
+        Some(Command::Config(_)) => unreachable!(),
     }
 }
 
-fn list(args: ListArgs) -> Result<(), String> {
+fn config(args: ConfigArgs, path: &std::path::Path) -> Result<(), String> {
+    match args.action {
+        ConfigAction::Path => println!("{}", path.display()),
+        ConfigAction::Init { force } => {
+            initialize_config(path, force).map_err(|error| error.to_string())?;
+            println!("已创建配置：{}", path.display());
+        }
+        ConfigAction::Show => {
+            let config = load_config(path).map_err(|error| error.to_string())?;
+            print!(
+                "{}",
+                format_config(&config).map_err(|error| error.to_string())?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn list(args: ListArgs, config: &StraydConfig) -> Result<(), String> {
     let snapshot = scan_all();
-    let groups = filter_groups(&snapshot.groups, &args.filters, args.kind);
+    let visible = apply_visibility_config(&snapshot.groups, config);
+    let groups = filter_groups(&visible, &args.filters, args.kind);
     if args.json {
         let output = ListOutput {
             groups: &groups,
@@ -51,10 +84,11 @@ fn list(args: ListArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn stop(args: StopArgs) -> Result<(), String> {
+fn stop(args: StopArgs, config: &StraydConfig) -> Result<(), String> {
     let snapshot = scan_all();
     print_warnings(&snapshot);
-    let plan = build_stop_plan(&snapshot.groups, args.target, &args.filters, args.all)
+    let visible = apply_visibility_config(&snapshot.groups, config);
+    let plan = build_stop_plan(&visible, args.target, &args.filters, args.all)
         .map_err(|error| error.to_string())?;
 
     println!("将停止 {} 项：", plan.len());

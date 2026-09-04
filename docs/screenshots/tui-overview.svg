@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Strayd terminal interface</title>
+  <desc id="desc">Strayd groups a Vite service on port 5000 with its Cloudflare tunnel and exposes mouse actions.</desc>
+  <rect width="1200" height="720" rx="24" fill="#070b12"/>
+  <rect x="24" y="22" width="1152" height="54" rx="12" fill="#0f141f" stroke="#354050"/>
+  <text x="46" y="55" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="700">STRAYD / TERMINAL CONTROL</text>
+  <text x="430" y="55" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700">1 ALL</text>
+  <text x="520" y="55" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">2 DEV</text>
+  <text x="610" y="55" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">3 TUNNELS</text>
+  <text x="750" y="55" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17">4 SYSTEM</text>
+
+  <rect x="24" y="92" width="430" height="526" rx="12" fill="#0b1019" stroke="#354050"/>
+  <text x="46" y="124" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">RESOURCES / 4</text>
+  <rect x="38" y="142" width="402" height="92" rx="9" fill="#19283a"/>
+  <rect x="38" y="142" width="5" height="92" rx="2" fill="#3dd6d0"/>
+  <text x="60" y="179" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22" font-weight="700">:5000</text>
+  <text x="150" y="179" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">storefront</text>
+  <text x="60" y="211" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">2 items / 1 tunnel</text>
+
+  <text x="58" y="282" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">:5173</text>
+  <text x="148" y="282" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">admin-console</text>
+  <text x="58" y="310" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">1 item</text>
+  <line x1="48" y1="336" x2="430" y2="336" stroke="#232c39"/>
+  <text x="58" y="378" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">:6006</text>
+  <text x="148" y="378" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">design-system</text>
+  <text x="58" y="406" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">1 item</text>
+  <line x1="48" y1="432" x2="430" y2="432" stroke="#232c39"/>
+  <text x="58" y="474" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">:22</text>
+  <text x="148" y="474" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">sshd</text>
+  <text x="58" y="502" fill="#f7be4d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">PROTECTED</text>
+
+  <rect x="470" y="92" width="706" height="526" rx="12" fill="#0b1019" stroke="#ab72ff"/>
+  <text x="494" y="124" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">RELATION &amp; PROCESS DETAIL</text>
+  <text x="494" y="174" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="19" font-weight="700">PUBLIC</text>
+  <text x="575" y="174" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">──▶</text>
+  <text x="630" y="174" fill="#ab72ff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="19">cloudflared</text>
+  <text x="770" y="174" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18">──▶</text>
+  <text x="825" y="174" fill="#3dd6d0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="19" font-weight="700">:5000 storefront</text>
+
+  <rect x="494" y="213" width="106" height="28" rx="4" fill="#3dd6d0"/>
+  <text x="509" y="233" fill="#0f141f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">SERVICE</text>
+  <text x="620" y="234" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700">vite</text>
+  <text x="690" y="234" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">PID 18420</text>
+  <text x="494" y="274" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">scope</text>
+  <text x="596" y="274" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">Linux</text>
+  <text x="494" y="305" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">listen</text>
+  <text x="596" y="305" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">:5000</text>
+  <text x="494" y="336" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">cwd</text>
+  <text x="596" y="336" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">~/projects/storefront</text>
+  <line x1="494" y1="370" x2="1148" y2="370" stroke="#354050"/>
+
+  <rect x="494" y="399" width="94" height="28" rx="4" fill="#ab72ff"/>
+  <text x="509" y="419" fill="#0f141f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">TUNNEL</text>
+  <text x="608" y="420" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700">cloudflared</text>
+  <text x="760" y="420" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">PID 18472</text>
+  <text x="494" y="460" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">proxy</text>
+  <text x="596" y="460" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">localhost:5000</text>
+  <text x="494" y="491" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">command</text>
+  <text x="596" y="491" fill="#f7f9fc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15">cloudflared tunnel --url http://localhost:5000</text>
+
+  <rect x="24" y="640" width="130" height="34" rx="5" fill="#ff657c"/><text x="43" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">d  SERVICE</text>
+  <rect x="166" y="640" width="130" height="34" rx="5" fill="#ff657c"/><text x="185" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">t  TUNNEL</text>
+  <rect x="308" y="640" width="116" height="34" rx="5" fill="#ff657c"/><text x="327" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">x  GROUP</text>
+  <rect x="436" y="640" width="130" height="34" rx="5" fill="#3dd6d0"/><text x="455" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">r  REFRESH</text>
+  <rect x="578" y="640" width="98" height="34" rx="5" fill="#3dd6d0"/><text x="597" y="663" fill="#070b12" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">q  QUIT</text>
+  <text x="706" y="663" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">mouse: tabs · rows · actions · wheel</text>
+  <text x="28" y="702" fill="#758097" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">4 groups / 5 resources · scan ready</text>
+</svg>
