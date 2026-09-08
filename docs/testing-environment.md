@@ -156,6 +156,6 @@ macOS/Windows 原生采集与六架构包安装已配置 CI，尚未在本次会
 
 - 夹具 ready 提供真实 PID/端口；独立账本记录 PID、启动时间和可执行文件。发现 PID 已复用时不终止新进程。
 - 正常结束先关闭控制管道、回收子进程，再独立核对所有登记对象；终止不依赖被测 `strayd stop`。
-- Bun 外层在失败、超时、SIGINT/SIGTERM 后继续执行独立清理；容器销毁及夹具最长寿命为强制终止提供兜底。`bun test tests/runner.test.ts` 实际检查超时与 SIGINT 后的 OS 进程状态。
+- Bun 外层在失败、超时、SIGINT/SIGTERM 后继续执行独立清理；容器销毁及夹具最长寿命为强制终止提供兜底。`bun test tests/runner.test.ts` 实际检查超时和真实终端 Ctrl+C 后的 OS 进程状态；Windows 不使用强制终止进程的 `kill(SIGINT)` 冒充终端中断。
 - 普通测试只保留自有进程的扫描证据，不提交整机进程转储、浏览器 profile 或原始凭证。所有运行输出位于 Git 忽略目录。
 - PID 复用通过错误启动标识契约验证，不宣称已经复现内核级复用竞态。公网隧道、未知第三方启动器和未列出的 OS 版本均不在本次实测声明内。

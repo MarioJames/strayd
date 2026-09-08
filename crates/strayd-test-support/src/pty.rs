@@ -317,6 +317,56 @@ pub fn run(env: &Environment, report: &mut Report) {
     }
 }
 
+pub fn runner_interrupt(env: &Environment, report: &mut Report) {
+    report.case("runner-terminal-interrupt", "native-fixture", |observed| {
+        let id = format!("interrupt-{}-{}", std::process::id(), env.root.file_name().unwrap().to_string_lossy());
+        let directory = env.repository.join(".test-env/runs").join(&id);
+        let ledger = directory.join("tui/resources.json");
+        let mut command_env = env.clone();
+        command_env.cli = vec!["bun".into(), env.repository.join("scripts/test-env.ts").to_string_lossy().into_owned()];
+        let mut terminal = Session::start(&command_env,
+            &["run", "--suite", "tui", "--no-build", "--run", &id], 24, 100)?;
+        let result = (|| -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                terminal.receive()?;
+                let ready = fs::read(&ledger).ok().and_then(|bytes| serde_json::from_slice::<Vec<crate::process::Identity>>(&bytes).ok())
+                    .is_some_and(|identities| identities.len() >= 3);
+                if ready { break; }
+                ensure!(Instant::now() < deadline, "nested runner fixtures were not ready: {}", terminal.screen());
+                ensure!(terminal.child.try_wait()?.is_none(), "nested runner exited before interruption: {}", terminal.screen());
+            }
+            // A terminal control event is portable; Bun.kill('SIGINT') on
+            // Windows forcibly terminates the process without running handlers.
+            terminal.send(b"\x03")?;
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                terminal.receive()?;
+                if let Some(status) = terminal.child.try_wait()? {
+                    ensure!(!status.success(), "interrupted runner returned success");
+                    break;
+                }
+                ensure!(Instant::now() < deadline, "interrupted runner did not exit: {}", terminal.screen());
+            }
+            let inner: serde_json::Value = serde_json::from_slice(&fs::read(directory.join("report.json"))?)?;
+            ensure!(inner["status"] == "cancelled" && inner["cleanup"] == "pass", "terminal interruption was not clean: {inner}");
+            let identities: Vec<crate::process::Identity> = serde_json::from_slice(&fs::read(&ledger)?)?;
+            ensure!(identities.iter().all(|identity| !alive(identity)), "interrupted runner left owned processes alive");
+            ensure!(!fs::read_dir(directory.join("tui"))?.filter_map(Result::ok).any(|entry| entry.file_name().to_string_lossy().starts_with("scratch-")), "interrupted runner left scratch files");
+            observed.push(json!({"input":"terminal Ctrl+C","status":inner["status"],"cleanup":inner["cleanup"]}));
+            Ok(())
+        })();
+        drop(terminal);
+        // Recovery must also run when the interruption assertion fails.
+        let cleanup = std::process::Command::new("bun")
+            .arg(env.repository.join("scripts/test-env.ts"))
+            .args(["cleanup", "--run", &id]).output()?;
+        ensure!(cleanup.status.success(), "nested runner independent cleanup failed: {}", String::from_utf8_lossy(&cleanup.stderr));
+        if directory.exists() { fs::rename(directory, env.output.join("interrupted-run"))?; }
+        result
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

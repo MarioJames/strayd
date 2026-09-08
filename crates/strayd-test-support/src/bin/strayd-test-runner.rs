@@ -116,6 +116,7 @@ fn run(args: Args) -> Result<bool> {
         "lifecycle" => cases::lifecycle(&env, &mut report),
         "faults" => cases::faults(&env, &mut report),
         "tui" => pty::run(&env, &mut report),
+        "runner-interrupt" => pty::runner_interrupt(&env, &mut report),
         "browser-setup" => strayd_test_support::browser::run(&env, &mut report),
         "stability" => special::stability(&env, &mut report),
         "systemd" => special::systemd(&env, &mut report),

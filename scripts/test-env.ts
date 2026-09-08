@@ -12,7 +12,7 @@ const suffix = process.platform === 'win32' ? '.exe' : '';
 const runner = join(repo, 'target/debug/strayd-test-runner' + suffix);
 const fixture = join(repo, 'target/debug/fixture-process' + suffix);
 const strayd = join(repo, 'target/debug/strayd' + suffix);
-const suites = ['smoke', 'native', 'cli', 'lifecycle', 'faults', 'tui', 'runtime-smoke', 'runtimes', 'replay', 'package', 'stability', 'systemd', 'permissions', 'desktop', 'wsl', 'app-mock', 'tunnel'];
+const suites = ['smoke', 'native', 'cli', 'lifecycle', 'faults', 'tui', 'runner-interrupt', 'runtime-smoke', 'runtimes', 'replay', 'package', 'stability', 'systemd', 'permissions', 'desktop', 'wsl', 'app-mock', 'tunnel'];
 const profiles = ['native', 'linux-container', 'replay', 'systemd-vm', 'permissions-container', 'wsl', 'desktop'];
 const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: {
   profile: { type: 'string', default: 'native' }, suite: { type: 'string', default: 'smoke' },
@@ -140,7 +140,7 @@ try {
     if (!values['no-build'] && !Bun.which('cargo')) { report.status = 'blocked'; throw new Error('Cargo is required to build native test artifacts'); }
     if (values['no-build'] && [runner, fixture, strayd].some(file => !existsSync(file))) { report.status = 'blocked'; throw new Error('Native artifacts are missing; run without --no-build'); }
     if (!values['no-build']) await checked(['cargo', 'build', '--locked', '-p', 'port-deck-cli', '-p', 'strayd-test-support'], { limit: 600000 });
-    if (process.platform === 'win32' && selected.includes('tui')) {
+    if (process.platform === 'win32' && selected.some(suite => ['tui', 'runner-interrupt'].includes(suite))) {
       report.conpty = await prepareConpty(runner, directory, checked);
     }
     report.artifact_sha256 = createHash('sha256').update(await readFile(strayd)).digest('hex');

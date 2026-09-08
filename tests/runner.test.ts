@@ -1,5 +1,4 @@
 import { test, expect } from 'bun:test';
-import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -35,20 +34,14 @@ test('a timeout fails the run and releases real PTY and fixture processes', asyn
   expect(result.report.reason).toContain('timed out'); expect(result.report.cleanup).toBe('pass');
   await noOwnedProcesses(task.directory, 'tui');
 }, 20000);
-test('SIGINT cancels a live run and independently cleans its registered resources', async () => {
-  const task = run(['--suite', 'tui']);
-  const ledger = join(task.directory, 'tui/resources.json');
-  const deadline = Date.now() + 10000;
-  while (Date.now() < deadline) {
-    if (existsSync(ledger) && (await Bun.file(ledger).json()).length >= 3) break;
-    await Bun.sleep(20);
-  }
-  expect(existsSync(ledger)).toBe(true);
-  task.child.kill('SIGINT');
+test('terminal Ctrl+C cancels a live runner and cleans its registered resources', async () => {
+  const task = run(['--suite', 'runner-interrupt']);
   const result = await finished(task);
-  expect(result.code).not.toBe(0); expect(result.report.status).toBe('cancelled'); expect(result.report.cleanup).toBe('pass');
-  await noOwnedProcesses(task.directory, 'tui');
-}, 20000);
+  expect(result.code).toBe(0); expect(result.report.cleanup).toBe('pass');
+  expect(result.report.suites[0].cases[0].status).toBe('pass');
+  expect(result.report.suites[0].cases[0].observations[0].status).toBe('cancelled');
+  await noOwnedProcesses(task.directory, 'runner-interrupt');
+}, 45000);
 test('a missing native platform is blocked and never replaced by replay', async () => {
   const profile = process.platform === 'darwin' ? 'wsl' : 'desktop';
   const task = run(['--profile', profile, '--suite', profile]);

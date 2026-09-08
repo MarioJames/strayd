@@ -827,6 +827,25 @@
       "sources": [
         "native-fixture"
       ]
+    },
+    {
+      "id": "runner-terminal-interrupt",
+      "suite": "runner-interrupt",
+      "requires": [
+        "pty",
+        "native-cli"
+      ],
+      "launch": [
+        "bun",
+        "scripts/test-env.ts",
+        "run",
+        "--suite",
+        "tui"
+      ],
+      "expected": "Ctrl+C in a real terminal cancels the runner, reports cancellation, and cleans all registered child processes and scratch files.",
+      "sources": [
+        "native-fixture"
+      ]
     }
   ]
 }

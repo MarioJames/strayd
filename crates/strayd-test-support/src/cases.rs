@@ -16,6 +16,7 @@ use crate::{
     until,
 };
 
+#[derive(Clone)]
 pub struct Environment {
     pub fixture: PathBuf,
     pub cli: Vec<String>,
