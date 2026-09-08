@@ -38,7 +38,7 @@ export async function prepareConpty(runner: string, output: string, checked: (ar
     const script = join(scratch, 'extract.ps1');
     await writeFile(script, 'param([string]$archive, [string]$destination)\n$ErrorActionPreference = "Stop"\nExpand-Archive -LiteralPath $archive -DestinationPath $destination -Force\n');
     const extracted = join(scratch, 'extracted');
-    await checked(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', script, archive, extracted]);
+    await checked(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, archive, extracted]);
     const sources = {
       'conpty.dll': join(extracted, `runtimes/win-${arch}/native/conpty.dll`),
       'OpenConsole.exe': join(extracted, `build/native/runtimes/${arch}/OpenConsole.exe`),

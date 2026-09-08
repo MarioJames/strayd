@@ -69,6 +69,17 @@ jobs:
           path: .test-env/runs/
           include-hidden-files: true
 
+      - uses: actions/upload-artifact@v4
+        if: failure() && runner.os == 'Windows'
+        with:
+          name: debug-${{ matrix.artifact }}
+          path: |
+            target/debug/strayd.exe
+            target/debug/strayd-test-runner.exe
+            target/debug/fixture-process.exe
+            target/debug/conpty.dll
+            target/debug/OpenConsole.exe
+
   package:
     needs: native
     runs-on: ubuntu-24.04
