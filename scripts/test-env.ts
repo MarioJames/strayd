@@ -36,7 +36,7 @@ let sequence = 0;
 async function command(args: string[], opts: { cwd?: string; limit?: number; cleanup?: boolean } = {}) {
   if (cancelled && !opts.cleanup) throw new Error('Run cancelled');
   const log = join(directory, `${action === 'cleanup' ? 'cleanup-' : ''}${String(sequence++).padStart(3, '0')}-${args[0].split(/[\\/]/).at(-1)}.log`);
-  const child = Bun.spawn(args, { cwd: opts.cwd ?? repo, stdin: 'ignore', stdout: Bun.file(log), stderr: Bun.file(log + '.stderr') });
+  const child = Bun.spawn(args, { cwd: opts.cwd ?? repo, env: { ...process.env, STRAYD_TEST_BUN: process.execPath }, stdin: 'ignore', stdout: Bun.file(log), stderr: Bun.file(log + '.stderr') });
   active.add(child);
   let expired = false;
   const timer = setTimeout(() => { expired = true; child.kill(); }, opts.limit ?? timeout);

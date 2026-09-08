@@ -10,6 +10,7 @@ function run(args: string[]) {
 }
 async function finished(task: ReturnType<typeof run>) {
   const code = await task.child.exited;
+  if (code !== 0) console.error(await new Response(task.child.stdout).text(), await new Response(task.child.stderr).text());
   return { code, report: await Bun.file(join(task.directory, 'report.json')).json() };
 }
 async function noOwnedProcesses(directory: string, suite: string) {

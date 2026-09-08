@@ -322,8 +322,11 @@ pub fn runner_interrupt(env: &Environment, report: &mut Report) {
         let id = format!("interrupt-{}-{}", std::process::id(), env.root.file_name().unwrap().to_string_lossy());
         let directory = env.repository.join(".test-env/runs").join(&id);
         let ledger = directory.join("tui/resources.json");
+        // ConPTY's executable lookup does not reliably resolve the Bun shim
+        // installed by setup-bun. Reuse the executable running the outer script.
+        let bun = std::env::var("STRAYD_TEST_BUN").context("run this suite through scripts/test-env.ts")?;
         let mut command_env = env.clone();
-        command_env.cli = vec!["bun".into(), env.repository.join("scripts/test-env.ts").to_string_lossy().into_owned()];
+        command_env.cli = vec![bun.clone(), env.repository.join("scripts/test-env.ts").to_string_lossy().into_owned()];
         let mut terminal = Session::start(&command_env,
             &["run", "--suite", "tui", "--no-build", "--run", &id], 24, 100)?;
         let result = (|| -> Result<()> {
@@ -358,7 +361,7 @@ pub fn runner_interrupt(env: &Environment, report: &mut Report) {
         })();
         drop(terminal);
         // Recovery must also run when the interruption assertion fails.
-        let cleanup = std::process::Command::new("bun")
+        let cleanup = std::process::Command::new(&bun)
             .arg(env.repository.join("scripts/test-env.ts"))
             .args(["cleanup", "--run", &id]).output()?;
         ensure!(cleanup.status.success(), "nested runner independent cleanup failed: {}", String::from_utf8_lossy(&cleanup.stderr));
