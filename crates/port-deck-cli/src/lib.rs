@@ -8,8 +8,10 @@ use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, RuntimeKind, Ser
 use serde::{Deserialize, Serialize};
 
 mod i18n;
+mod process_time;
 
 pub use i18n::{Language, Translator};
+pub use process_time::{format_started_at, format_uptime, unix_now};
 
 pub const DEFAULT_CONFIG_TOML: &str = r#"# Strayd configuration
 # Rules are ORed; fields inside one rule are ANDed.

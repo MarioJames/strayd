@@ -15,7 +15,7 @@ use crossterm::terminal::{
 use port_deck_cli::{
     ConfigPlatform, ConfigResourceKind, Filters, HideField, HideRule, Language, StopTarget,
     StraydConfig, TabTarget, Translator, TuiArgs, apply_visibility_config, build_stop_plan,
-    runtime_slug, save_config,
+    format_started_at, format_uptime, runtime_slug, save_config, unix_now,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -106,6 +106,8 @@ struct App {
     tab: TabTarget,
     selected: usize,
     list_offset: usize,
+    detail_scroll: u16,
+    detail_group_id: Option<String>,
     hidden_count: usize,
     regions: UiRegions,
     pending: Option<PendingStop>,
@@ -152,6 +154,7 @@ enum NavigationAction {
 struct UiRegions {
     tabs: Vec<(Rect, TabTarget)>,
     list: Rect,
+    detail: Rect,
     footer_actions: Vec<(Rect, MouseAction)>,
     confirm: Rect,
     cancel: Rect,
@@ -207,6 +210,8 @@ impl App {
             tab: args.tab,
             selected: 0,
             list_offset: 0,
+            detail_scroll: 0,
+            detail_group_id: None,
             hidden_count,
             regions: UiRegions::new(Rect::default(), args.tab, 0),
             pending: None,
@@ -344,6 +349,16 @@ impl App {
             KeyCode::Char('2') => self.set_tab(TabTarget::Dev),
             KeyCode::Char('3') => self.set_tab(TabTarget::Tunnels),
             KeyCode::Char('4') => self.set_tab(TabTarget::System),
+            KeyCode::PageDown => {
+                self.detail_scroll = self
+                    .detail_scroll
+                    .saturating_add(self.regions.detail.height.saturating_sub(3).max(1))
+            }
+            KeyCode::PageUp => {
+                self.detail_scroll = self
+                    .detail_scroll
+                    .saturating_sub(self.regions.detail.height.saturating_sub(3).max(1))
+            }
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.select_last(),
             KeyCode::Char('r') => self.refresh(),
@@ -360,6 +375,8 @@ impl App {
             MouseEventKind::ScrollDown if self.pending.is_none() && self.pending_hide.is_none() => {
                 if self.settings_open {
                     self.select_next_setting();
+                } else if rect_contains(self.regions.detail, mouse.column, mouse.row) {
+                    self.detail_scroll = self.detail_scroll.saturating_add(3);
                 } else {
                     self.select_next();
                 }
@@ -367,6 +384,8 @@ impl App {
             MouseEventKind::ScrollUp if self.pending.is_none() && self.pending_hide.is_none() => {
                 if self.settings_open {
                     self.select_previous_setting();
+                } else if rect_contains(self.regions.detail, mouse.column, mouse.row) {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(3);
                 } else {
                     self.select_previous();
                 }
@@ -796,6 +815,11 @@ impl App {
         frame.render_stateful_widget(list, columns[0], &mut state);
         self.list_offset = state.offset();
 
+        let group_id = self.selected_group().map(|group| group.id.clone());
+        if self.detail_group_id != group_id {
+            self.detail_scroll = 0;
+            self.detail_group_id = group_id;
+        }
         let detail = self
             .selected_group()
             .map(|group| group_detail(group, self.tr, columns[1].width.saturating_sub(4) as usize))
@@ -804,13 +828,24 @@ impl App {
                 commands: Vec::new(),
             });
         let content_height = columns[1].height.saturating_sub(2 + MAIN_PANEL_TOP_PADDING);
+        let max_scroll = detail
+            .text
+            .lines
+            .len()
+            .saturating_sub(usize::from(content_height))
+            .min(u16::MAX as usize) as u16;
+        self.detail_scroll = self.detail_scroll.min(max_scroll);
         self.regions.command_copies = detail
             .commands
             .iter()
-            .filter(|(row, _)| *row < content_height)
-            .map(|(row, command)| (command_copy_rect(columns[1], *row), command.clone()))
+            .filter_map(|(row, command)| {
+                let visible_row = row.checked_sub(self.detail_scroll)?;
+                (visible_row < content_height)
+                    .then(|| (command_copy_rect(columns[1], visible_row), command.clone()))
+            })
             .collect();
         let detail = Paragraph::new(detail.text)
+            .scroll((self.detail_scroll, 0))
             .style(Style::default().fg(TEXT).bg(SURFACE))
             .block(
                 Block::bordered()
@@ -1061,7 +1096,7 @@ impl UiRegions {
             Constraint::Length(FOOTER_HEIGHT),
         ])
         .areas(area);
-        let [list_column, _] = content_columns(content_area);
+        let [list_column, detail] = content_columns(content_area);
         let list = Rect::new(
             list_column.x.saturating_add(2),
             list_column.y.saturating_add(1 + MAIN_PANEL_TOP_PADDING),
@@ -1153,6 +1188,7 @@ impl UiRegions {
         Self {
             tabs,
             list,
+            detail,
             footer_actions,
             confirm,
             cancel,
@@ -1609,8 +1645,7 @@ fn group_list_item(group: &ResourceGroup, tr: Translator) -> ListItem<'static> {
         .find(|service| service.resource_kind != ResourceKind::Tunnel)
         .or_else(|| group.services.first());
     let name = primary
-        .and_then(|service| service.project_name.as_deref())
-        .or_else(|| primary.map(|service| service.process_name.as_str()))
+        .map(|service| service.display_name.as_str())
         .unwrap_or(tr.text("tui_unknown"))
         .to_owned();
     let port = group
@@ -1648,6 +1683,7 @@ fn group_list_item(group: &ResourceGroup, tr: Translator) -> ListItem<'static> {
 fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> DetailContent {
     let mut lines = Vec::new();
     let mut commands = Vec::new();
+    let now = unix_now();
     lines.push(route_line(group, tr, width));
     lines.push(Line::from(""));
     for (index, service) in group.services.iter().enumerate() {
@@ -1669,14 +1705,33 @@ fn group_detail(group: &ResourceGroup, tr: Translator, width: usize) -> DetailCo
             ),
             Span::raw("  "),
             Span::styled(
-                runtime_slug(&service.runtime),
+                service.display_name.clone(),
                 Style::default().fg(Color::White).bold(),
+            ),
+            Span::styled(
+                format!("  ({})", runtime_slug(&service.runtime)),
+                Style::default().fg(MUTED),
             ),
             Span::styled(format!("  PID {}", service.pid), Style::default().fg(MUTED)),
         ]));
         lines.push(detail_line(
             tr.text("tui_field_scope"),
             scope_label(service),
+            width,
+        ));
+        lines.push(detail_line(
+            tr.text("process_name_short"),
+            service.process_name.clone(),
+            width,
+        ));
+        lines.push(detail_line(
+            tr.text("process_started_at"),
+            format_started_at(service.started_at, tr),
+            width,
+        ));
+        lines.push(detail_line(
+            tr.text("process_uptime"),
+            format_uptime(service.started_at, now, tr),
             width,
         ));
         if !service.ports.is_empty() {
@@ -1831,13 +1886,7 @@ fn route_line(group: &ResourceGroup, tr: Translator, width: usize) -> Line<'stat
             let runtime = runtime_slug(&tunnel.runtime);
             let fixed_width = public.chars().count() + runtime.chars().count() + 14;
             let source = truncate_text(
-                &format!(
-                    ":{port} {}",
-                    source
-                        .project_name
-                        .as_deref()
-                        .unwrap_or(&source.process_name)
-                ),
+                &format!(":{port} {}", source.display_name.as_str()),
                 width.saturating_sub(fixed_width),
             );
             Line::from(vec![
@@ -1853,10 +1902,7 @@ fn route_line(group: &ResourceGroup, tr: Translator, width: usize) -> Line<'stat
                 &format!(
                     "{} :{port} / {}",
                     tr.text("tui_route_local"),
-                    source
-                        .project_name
-                        .as_deref()
-                        .unwrap_or(&source.process_name)
+                    source.display_name.as_str()
                 ),
                 width,
             ),

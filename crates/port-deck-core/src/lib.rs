@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+mod naming;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimeKind {
@@ -66,6 +68,7 @@ pub struct ServiceProcess {
     pub ports: Vec<u16>,
     pub hosts: Vec<String>,
     pub process_name: String,
+    pub display_name: String,
     pub command: String,
     pub cwd: Option<String>,
     pub project_name: Option<String>,
@@ -74,6 +77,8 @@ pub struct ServiceProcess {
     pub can_terminate: bool,
     pub manager_unit: Option<String>,
     pub tunnel_target: Option<TunnelTarget>,
+    /// Process creation time in Unix seconds; None when unavailable.
+    pub started_at: Option<u64>,
     pub start_token: String,
 }
 
@@ -99,8 +104,12 @@ pub struct NativeListenerRecord {
     pub pid: u32,
     pub parent_pid: u32,
     pub process_name: String,
+    pub executable: Option<String>,
+    pub arguments: Vec<String>,
     pub command: String,
     pub cwd: Option<String>,
+    /// Process creation time in Unix seconds; None when unavailable.
+    pub started_at: Option<u64>,
     pub start_token: String,
 }
 
@@ -109,8 +118,12 @@ pub struct NativeProcessRecord {
     pub pid: u32,
     pub parent_pid: u32,
     pub process_name: String,
+    pub executable: Option<String>,
+    pub arguments: Vec<String>,
     pub command: String,
     pub cwd: Option<String>,
+    /// Process creation time in Unix seconds; None when unavailable.
+    pub started_at: Option<u64>,
     pub start_token: String,
 }
 
@@ -342,6 +355,15 @@ pub fn group_native_resources(
         let resource_kind = resource_kind_for(&runtime);
         let can_terminate = can_terminate_runtime(&runtime);
         let tunnel_target = extract_tunnel_target(&runtime, &record.command);
+        let project_name = record.cwd.as_deref().and_then(naming::project_name);
+        let display_name = naming::display_name(
+            record.pid,
+            &record.process_name,
+            record.executable.as_deref(),
+            &record.arguments,
+            &runtime,
+            project_name.as_deref(),
+        );
         let service = grouped.entry(key).or_insert_with(|| ServiceProcess {
             id: format!(
                 "{}:{}:{}",
@@ -354,15 +376,17 @@ pub fn group_native_resources(
             parent_pid: record.parent_pid,
             ports: Vec::new(),
             hosts: Vec::new(),
+            display_name,
             process_name: record.process_name.clone(),
             command: record.command.clone(),
             cwd: record.cwd.clone(),
-            project_name: record.cwd.as_deref().and_then(project_name),
+            project_name,
             runtime,
             resource_kind,
             can_terminate,
             manager_unit: None,
             tunnel_target,
+            started_at: record.started_at,
             start_token: record.start_token.clone(),
         });
         push_listener(service, record.port, record.host);
@@ -380,6 +404,15 @@ pub fn group_native_resources(
         }
         let can_terminate = can_terminate_runtime(&runtime);
         let tunnel_target = extract_tunnel_target(&runtime, &process.command);
+        let project_name = process.cwd.as_deref().and_then(naming::project_name);
+        let display_name = naming::display_name(
+            process.pid,
+            &process.process_name,
+            process.executable.as_deref(),
+            &process.arguments,
+            &runtime,
+            project_name.as_deref(),
+        );
         grouped.insert(
             key,
             ServiceProcess {
@@ -394,15 +427,17 @@ pub fn group_native_resources(
                 parent_pid: process.parent_pid,
                 ports: Vec::new(),
                 hosts: Vec::new(),
+                display_name,
                 process_name: process.process_name,
                 command: process.command,
                 cwd: process.cwd.clone(),
-                project_name: process.cwd.as_deref().and_then(project_name),
+                project_name,
                 runtime,
                 resource_kind,
                 can_terminate,
                 manager_unit: None,
                 tunnel_target,
+                started_at: process.started_at,
                 start_token: process.start_token,
             },
         );
@@ -616,13 +651,6 @@ fn is_loopback_host(host: &str) -> bool {
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())
-}
-
-fn project_name(path: &str) -> Option<String> {
-    path.trim_end_matches(['/', '\\'])
-        .rsplit(['/', '\\'])
-        .find(|segment| !segment.is_empty())
-        .map(str::to_owned)
 }
 
 fn push_listener(service: &mut ServiceProcess, port: u16, host: String) {

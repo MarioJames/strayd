@@ -7,8 +7,8 @@ use clap::Parser;
 use port_deck_cli::{
     Cli, Command, ConfigAction, ConfigArgs, Language, LanguageSetting, ListArgs, StopArgs,
     StraydConfig, Translator, TuiArgs, apply_visibility_config, build_stop_plan, filter_groups,
-    format_config, initialize_config, load_config, resolve_config_path, resolve_system_language,
-    runtime_slug,
+    format_config, format_started_at, format_uptime, initialize_config, load_config,
+    resolve_config_path, resolve_system_language, runtime_slug, unix_now,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -190,6 +190,13 @@ fn print_groups(groups: &[ResourceGroup], tr: Translator) {
         );
         for service in &group.services {
             println!("          {}", describe_service(service));
+            println!(
+                "          {}: {}  |  {}: {}",
+                tr.text("process_started_at"),
+                format_started_at(service.started_at, tr),
+                tr.text("process_uptime"),
+                format_uptime(service.started_at, unix_now(), tr),
+            );
         }
     }
 }
@@ -206,12 +213,7 @@ fn group_label(group: &ResourceGroup) -> String {
         .iter()
         .find(|service| service.resource_kind != ResourceKind::Tunnel)
         .or_else(|| group.services.first())
-        .map(|service| {
-            service
-                .project_name
-                .clone()
-                .unwrap_or_else(|| service.process_name.clone())
-        })
+        .map(|service| service.display_name.clone())
         .unwrap_or_else(|| group.id.clone())
 }
 
@@ -227,7 +229,8 @@ fn describe_service(service: &ServiceProcess) -> String {
         .map(|target| format!(" -> {}:{}", target.host, target.port))
         .unwrap_or_default();
     format!(
-        "{} pid={} {} {}{}",
+        "{} ({}) pid={} {} {}{}",
+        service.display_name,
         runtime_slug(&service.runtime),
         service.pid,
         platform,

@@ -21,8 +21,11 @@ fn groups_native_listeners_for_the_same_process() {
         pid: 8200,
         parent_pid: 7900,
         process_name: "node.exe".into(),
+        executable: None,
+        arguments: Vec::new(),
         command: r#""C:\Program Files\nodejs\node.exe" C:\Projects\app-shell\node_modules\vite\bin\vite.js"#.into(),
         cwd: Some(r"C:\Projects\app-shell".into()),
+        started_at: Some(1720000000),
         start_token: "13432622".into(),
     };
     let services = group_native_resources(
@@ -96,8 +99,11 @@ fn discovers_tunnels_without_listening_ports() {
             pid: 9400,
             parent_pid: 8012,
             process_name: "cloudflared.exe".into(),
+            executable: None,
+            arguments: Vec::new(),
             command: "cloudflared.exe tunnel --url http://localhost:3000".into(),
             cwd: Some(r"C:\Tools\cloudflared".into()),
+            started_at: Some(1720000000),
             start_token: "452110".into(),
         }],
     );
@@ -174,16 +180,22 @@ fn groups_a_tunnel_with_its_source_service_in_the_same_scope() {
         pid: 8100,
         parent_pid: 8000,
         process_name: "node.exe".into(),
+        executable: None,
+        arguments: Vec::new(),
         command: "node.exe server.js".into(),
         cwd: Some(r"C:\Projects\catalog-api".into()),
+        started_at: Some(1720000000),
         start_token: "31000".into(),
     }];
     let tunnels = vec![NativeProcessRecord {
         pid: 8200,
         parent_pid: 8000,
         process_name: "cloudflared.exe".into(),
+        executable: None,
+        arguments: Vec::new(),
         command: "cloudflared.exe tunnel --url http://localhost:5000".into(),
         cwd: Some(r"C:\Projects\catalog-api".into()),
+        started_at: Some(1720000000),
         start_token: "31010".into(),
     }];
 
@@ -213,8 +225,11 @@ fn does_not_group_same_numbered_ports_across_execution_scopes() {
             pid: 8100,
             parent_pid: 8000,
             process_name: "node.exe".into(),
+            executable: None,
+            arguments: Vec::new(),
             command: "node.exe server.js".into(),
             cwd: Some(r"C:\Projects\catalog-api".into()),
+            started_at: Some(1720000000),
             start_token: "31000".into(),
         }],
         Vec::new(),
@@ -226,8 +241,11 @@ fn does_not_group_same_numbered_ports_across_execution_scopes() {
             pid: 8300,
             parent_pid: 1,
             process_name: "cloudflared".into(),
+            executable: None,
+            arguments: Vec::new(),
             command: "cloudflared tunnel --url http://localhost:5000".into(),
             cwd: Some("/home/mocha/catalog-api".into()),
+            started_at: Some(1720000000),
             start_token: "32000".into(),
         }],
     );
@@ -272,8 +290,11 @@ fn recognizes_tunnel_clients_and_protects_sshd() {
             pid: 222,
             parent_pid: 1,
             process_name: "sshd".into(),
+            executable: None,
+            arguments: Vec::new(),
             command: "/usr/sbin/sshd -D".into(),
             cwd: Some("/".into()),
+            started_at: Some(1720000000),
             start_token: "6000".into(),
         }],
     )
@@ -290,8 +311,11 @@ fn groups_linux_listeners_with_process_metadata() {
         pid: 412,
         parent_pid: 1,
         process_name: "next-server".into(),
+        executable: None,
+        arguments: Vec::new(),
         command: "node node_modules/next/dist/bin/next dev".into(),
         cwd: Some("/home/mocha/workspaces/shop-ui".into()),
+        started_at: Some(1720000000),
         start_token: "9876".into(),
     };
     let services = group_native_resources(
@@ -323,6 +347,8 @@ fn groups_linux_listeners_with_process_metadata() {
     assert_eq!(service.resource_kind, ResourceKind::Development);
     assert!(service.can_terminate);
     assert_eq!(service.start_token, "9876");
+    assert_eq!(service.started_at, Some(1720000000));
+    assert_eq!(service.display_name, "shop-ui");
 }
 
 #[test]
@@ -345,4 +371,95 @@ fn rejects_a_reused_pid_before_terminating_it() {
         Err(IdentityError::Changed)
     );
     assert_eq!(ensure_process_identity("9876", Some("9876")), Ok(()));
+}
+
+#[test]
+fn derives_useful_names_instead_of_home_and_binary_directories() {
+    let cases = [
+        (
+            HostPlatform::MacOs,
+            "/Users/mocha",
+            "cfuse",
+            "/Users/mocha/.local/share/codefuse-cli/versions/v2.6.39/cfuse --cfuse-hub-daemon-runner",
+            None,
+        ),
+        (
+            HostPlatform::MacOs,
+            "/Users/mocha/",
+            "cfuse",
+            "/Users/mocha/.local/bin/cfuse proxy --port 9792",
+            None,
+        ),
+        (
+            HostPlatform::Linux,
+            "/home/mocha",
+            "cfuse",
+            "cfuse proxy --port 9792",
+            None,
+        ),
+        (
+            HostPlatform::Windows,
+            r"C:\Users\mocha",
+            "cfuse.exe",
+            "cfuse.exe proxy --port 9792",
+            None,
+        ),
+        (
+            HostPlatform::MacOs,
+            "/Users/mocha/.r2c/runtime/ai-coding-trace/bin",
+            "node",
+            "node server.js",
+            Some("ai-coding-trace"),
+        ),
+        (
+            HostPlatform::MacOs,
+            "/Applications/波点音乐.app/Contents/MacOS",
+            "波点音乐",
+            "/Applications/波点音乐.app/Contents/MacOS/波点音乐",
+            Some("波点音乐"),
+        ),
+        (
+            HostPlatform::MacOs,
+            "/Users/mocha/.local/bin",
+            "cfuse",
+            "cfuse proxy --port 9792",
+            None,
+        ),
+        (
+            HostPlatform::Linux,
+            "/usr/local/bin",
+            "daemon",
+            "daemon",
+            None,
+        ),
+        (HostPlatform::Linux, "/root", "daemon", "daemon", None),
+        (
+            HostPlatform::Linux,
+            "/home/mocha/projects/shop",
+            "node",
+            "node server.js",
+            Some("shop"),
+        ),
+    ];
+    for (platform, cwd, name, command, expected) in cases {
+        let services = group_native_resources(
+            platform,
+            vec![NativeListenerRecord {
+                port: 9792,
+                host: "127.0.0.1".into(),
+                pid: 42,
+                parent_pid: 1,
+                process_name: name.into(),
+                executable: None,
+                arguments: Vec::new(),
+                command: command.into(),
+                cwd: Some(cwd.into()),
+                started_at: Some(1720000000),
+                start_token: "1720000000".into(),
+            }],
+            Vec::new(),
+        );
+        assert_eq!(services[0].project_name.as_deref(), expected, "cwd={cwd}");
+        assert_eq!(services[0].process_name, name);
+    }
 }

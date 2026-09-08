@@ -438,6 +438,7 @@ fn service(
         ports: vec![port],
         hosts: vec!["127.0.0.1".into()],
         process_name: "node".into(),
+        display_name: "shop".into(),
         command: "node server.js".into(),
         cwd: Some("/workspaces/shop".into()),
         project_name: Some("shop".into()),
@@ -446,6 +447,7 @@ fn service(
         can_terminate: true,
         manager_unit: None,
         tunnel_target: None,
+        started_at: Some(1720000000),
         start_token: "100".into(),
     }
 }

@@ -140,3 +140,8 @@ tui_field_id = "资源 ID"
 tui_value_unavailable = "不可用"
 tui_config_path = "配置文件：{path}"
 tui_config_read_only = "配置文件：只读（--no-config）"
+
+process_started_at = "创建时间"
+process_uptime = "运行时长"
+process_uptime_days = "{days}天 {clock}"
+process_name_short = "进程名"

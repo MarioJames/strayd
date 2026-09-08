@@ -208,8 +208,11 @@ fn scan_host_services() -> Result<Vec<ServiceProcess>, String> {
                 pid: metadata.pid,
                 parent_pid: metadata.parent_pid,
                 process_name: metadata.process_name,
+                executable: metadata.executable,
+                arguments: metadata.arguments,
                 command: metadata.command,
                 cwd: metadata.cwd,
+                started_at: metadata.started_at,
                 start_token: metadata.start_token,
             });
         }
@@ -238,12 +241,12 @@ fn scan_host_services() -> Result<Vec<ServiceProcess>, String> {
 
 fn process_metadata(pid: u32, process: &Process) -> NativeProcessRecord {
     let process_name = process.name().to_string_lossy().into_owned();
-    let command = process
+    let arguments = process
         .cmd()
         .iter()
-        .map(|part| part.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ");
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let command = arguments.join(" ");
     NativeProcessRecord {
         pid,
         parent_pid: process
@@ -251,6 +254,10 @@ fn process_metadata(pid: u32, process: &Process) -> NativeProcessRecord {
             .map(|value| value.as_u32())
             .unwrap_or_default(),
         process_name: process_name.clone(),
+        executable: process
+            .exe()
+            .map(|path| path.to_string_lossy().into_owned()),
+        arguments,
         command: if command.is_empty() {
             process_name
         } else {
@@ -259,6 +266,7 @@ fn process_metadata(pid: u32, process: &Process) -> NativeProcessRecord {
         cwd: process
             .cwd()
             .map(|path| path.to_string_lossy().into_owned()),
+        started_at: (process.start_time() > 0).then(|| process.start_time()),
         start_token: process.start_time().to_string(),
     }
 }

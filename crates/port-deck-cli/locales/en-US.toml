@@ -140,3 +140,8 @@ tui_field_id = "Resource ID"
 tui_value_unavailable = "unavailable"
 tui_config_path = "Configuration: {path}"
 tui_config_read_only = "Configuration: read-only (--no-config)"
+
+process_started_at = "Started"
+process_uptime = "Uptime"
+process_uptime_days = "{days}d {clock}"
+process_name_short = "Process"
