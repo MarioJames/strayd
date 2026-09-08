@@ -34,19 +34,19 @@ fn verify(env: &Environment, child: &ManagedChild, expected: &str) -> Result<()>
 }
 
 pub fn run(env: &Environment, report: &mut Report) {
-    cases::cfuse(env, report);
-    report.case("mock-wave-music", "native-fixture", |observed| {
+    cases::native_binary(env, report);
+    report.case("mock-unicode-app-bundle", "native-fixture", |observed| {
         // The bundle layout is intentionally also executable on Linux/Windows:
         // it tests the path contract there, not Apple's LaunchServices.
         let mut child = env.fixture(
-            "Applications/波点音乐.app/Contents/MacOS",
-            "波点音乐",
+            "Applications/测试播放器.app/Contents/MacOS",
+            "测试播放器",
             None,
             &[],
         )?;
-        verify(env, &child, "波点音乐")?;
+        verify(env, &child, "测试播放器")?;
         let service = env.scan(&child, observed)?;
-        ensure!(service.display_name == "波点音乐", "bundle name was lost");
+        ensure!(service.display_name == "测试播放器", "bundle name was lost");
         env.terminate(&service, &child)?;
         until(Duration::from_secs(3), || Ok(!alive(&child.identity)))?;
         child.cleanup()?;
@@ -57,13 +57,13 @@ pub fn run(env: &Environment, report: &mut Report) {
         Ok(())
     });
     report.case("mock-electron-helper-tree", "native-fixture", |observed| {
-        let bundle = "Applications/Visual Studio Code.app/Contents";
+        let bundle = "Applications/Strayd Test Desk.app/Contents";
         let helper_dir = env
             .root
             .join(bundle)
-            .join("Frameworks/Code Helper.app/Contents/MacOS");
+            .join("Frameworks/Test Helper.app/Contents/MacOS");
         fs::create_dir_all(&helper_dir)?;
-        let helper_exe = helper_dir.join(executable_name("Code Helper"));
+        let helper_exe = helper_dir.join(executable_name("Test Helper"));
         fs::copy(&env.fixture, &helper_exe)?;
         // A second instance has the same name but must survive stopping this tree.
         let mut control = env.fixture(&format!("control/{bundle}/MacOS"), "Electron", None, &[])?;
@@ -82,7 +82,7 @@ pub fn run(env: &Environment, report: &mut Report) {
                 "--utility-sub-type=node.mojom.NodeService",
             ],
         )?;
-        verify(env, &parent, "Visual Studio Code")?;
+        verify(env, &parent, "Strayd Test Desk")?;
         let helper = identity(parent.ready.children[0])?;
         let services = env.cli_services(&["--no-config", "list", "--json"])?;
         let service = services
@@ -94,7 +94,7 @@ pub fn run(env: &Environment, report: &mut Report) {
             "helper lost its real parent"
         );
         ensure!(
-            service.display_name == "Visual Studio Code",
+            service.display_name == "Strayd Test Desk",
             "helper must use the outer app name"
         );
         ensure!(
@@ -109,7 +109,7 @@ pub fn run(env: &Environment, report: &mut Report) {
         until(Duration::from_secs(3), || {
             Ok(!alive(&parent.identity) && !alive(&helper))
         })?;
-        verify(env, &control, "Visual Studio Code")?;
+        verify(env, &control, "Strayd Test Desk")?;
         observed.push(
             json!({"helper_pid":helper.pid,"control_pid":control.ready.pid,"control_alive":true}),
         );

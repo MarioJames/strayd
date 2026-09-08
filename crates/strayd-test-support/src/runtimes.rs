@@ -59,7 +59,7 @@ pub fn run(env: &Environment, report: &mut Report, extended: bool) {
         }
         report.case(&format!("runtime-{runtime}"), "native-fixture", |observed| {
             let root = env.root.join(format!("runtime-{runtime}"));
-            let directory = root.join("ai-coding-trace/bin");
+            let directory = root.join("fixture-project/bin");
             fs::create_dir_all(&directory)?;
             let mut command = Command::new(executable);
             command.current_dir(&directory);
@@ -71,13 +71,13 @@ pub fn run(env: &Environment, report: &mut Report, extended: bool) {
                     if runtime == "deno" { command.args(["run", "--allow-net", "--allow-env"]); }
                     if runtime == "node-title" { command.env("STRAYD_FIXTURE_TITLE", "next-server (fixture)"); }
                     command.arg(script);
-                    "ai-coding-trace"
+                    "fixture-project"
                 }
                 "python" => {
                     let script = directory.join("server.py");
                     fs::copy(env.repository.join("tests/apps/server.py"), &script)?;
                     command.arg(script);
-                    "ai-coding-trace"
+                    "fixture-project"
                 }
                 "python-module" => {
                     fs::create_dir_all(directory.join("trace_probe"))?;

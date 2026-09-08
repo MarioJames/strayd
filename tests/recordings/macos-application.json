@@ -8,17 +8,17 @@
     {
       "pid": 10003,
       "parentPid": 1,
-      "processName": "波点音乐",
-      "executable": "/Applications/波点音乐.app/Contents/MacOS/波点音乐",
+      "processName": "测试播放器",
+      "executable": "/Applications/测试播放器.app/Contents/MacOS/测试播放器",
       "arguments": [
-        "/Applications/波点音乐.app/Contents/MacOS/波点音乐"
+        "/Applications/测试播放器.app/Contents/MacOS/测试播放器"
       ],
-      "cwd": "/Applications/波点音乐.app/Contents/MacOS",
+      "cwd": "/Applications/测试播放器.app/Contents/MacOS",
       "startedAt": 1720000000,
       "ports": [
         9792
       ],
-      "expectedName": "波点音乐"
+      "expectedName": "测试播放器"
     }
   ]
 }

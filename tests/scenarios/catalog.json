@@ -18,36 +18,36 @@
   },
   "cases": [
     {
-      "id": "cfuse-home-proxy",
+      "id": "native-home-proxy",
       "suite": "native",
       "requires": [
         "owned-process",
         "tcp"
       ],
       "launch": [
-        "${fixture:cfuse}",
+        "${fixture:fixture-agent}",
         "proxy",
         "--port",
         "9792"
       ],
-      "expected": "Executable is cfuse despite the home working directory.",
+      "expected": "Executable is fixture-agent despite the home working directory.",
       "sources": [
         "native-fixture",
         "synthetic"
       ]
     },
     {
-      "id": "cfuse-hub-daemon",
+      "id": "native-daemon-mode",
       "suite": "native",
       "requires": [
         "owned-process",
         "tcp"
       ],
       "launch": [
-        "${fixture:cfuse}",
-        "--cfuse-hub-daemon-runner"
+        "${fixture:fixture-agent}",
+        "--daemon-runner"
       ],
-      "expected": "Executable is cfuse for the daemon runner arguments.",
+      "expected": "Executable is fixture-agent for the daemon runner arguments.",
       "sources": [
         "native-fixture",
         "synthetic"
@@ -611,7 +611,7 @@
         "${runtime}",
         "${runtime-specific-arguments...}"
       ],
-      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "expected": "fixture-project is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
       "sources": [
         "native-fixture"
       ]
@@ -626,7 +626,7 @@
         "${runtime}",
         "${runtime-specific-arguments...}"
       ],
-      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "expected": "fixture-project is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
       "sources": [
         "native-fixture"
       ]
@@ -641,7 +641,7 @@
         "${runtime}",
         "${runtime-specific-arguments...}"
       ],
-      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "expected": "fixture-project is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
       "sources": [
         "native-fixture"
       ]
@@ -656,7 +656,7 @@
         "${runtime}",
         "${runtime-specific-arguments...}"
       ],
-      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "expected": "fixture-project is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
       "sources": [
         "native-fixture"
       ]
@@ -686,7 +686,7 @@
         "${runtime}",
         "${runtime-specific-arguments...}"
       ],
-      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "expected": "fixture-project is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
       "sources": [
         "native-fixture"
       ]
@@ -722,14 +722,14 @@
       ]
     },
     {
-      "id": "ai-coding-trace-bin",
+      "id": "runtime-project-bin",
       "suite": "replay",
       "requires": [
         "recording"
       ],
       "launch": [
         "read-only-recording",
-        "ai-coding-trace-bin"
+        "runtime-project-bin"
       ],
       "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
       "sources": [
@@ -797,16 +797,16 @@
       ]
     },
     {
-      "id": "mock-wave-music",
+      "id": "mock-unicode-app-bundle",
       "suite": "app-mock",
       "requires": [
         "native-process",
         "tcp-listener"
       ],
       "launch": [
-        "${fixture-root}/Applications/波点音乐.app/Contents/MacOS/波点音乐"
+        "${fixture-root}/Applications/测试播放器.app/Contents/MacOS/测试播放器"
       ],
-      "expected": "Actual CLI and native scanner name the listening process 波点音乐; stopping releases its port.",
+      "expected": "Actual CLI and native scanner name the listening process 测试播放器; stopping releases its port.",
       "sources": [
         "native-fixture"
       ]
@@ -819,11 +819,11 @@
         "tcp-listener"
       ],
       "launch": [
-        "${fixture-root}/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+        "${fixture-root}/Applications/Strayd Test Desk.app/Contents/MacOS/Electron",
         "--fixture-child-executable",
-        "${fixture-root}/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"
+        "${fixture-root}/Applications/Strayd Test Desk.app/Contents/Frameworks/Test Helper.app/Contents/MacOS/Test Helper"
       ],
-      "expected": "Parent and utility helper are distinct listening OS processes named Visual Studio Code. Stopping the parent removes its helper and preserves a same-named independent instance.",
+      "expected": "Parent and utility helper are distinct listening OS processes named Strayd Test Desk. Stopping the parent removes its helper and preserves a same-named independent instance.",
       "sources": [
         "native-fixture"
       ]

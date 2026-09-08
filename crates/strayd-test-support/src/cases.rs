@@ -124,20 +124,20 @@ pub fn executable_name(name: &str) -> String {
     }
 }
 
-pub fn cfuse(env: &Environment, report: &mut Report) {
+pub fn native_binary(env: &Environment, report: &mut Report) {
     for (case, arguments) in [
-        ("cfuse-home-proxy", vec!["proxy", "--port", "9792"]),
-        ("cfuse-hub-daemon", vec!["--cfuse-hub-daemon-runner"]),
+        ("native-home-proxy", vec!["proxy", "--port", "9792"]),
+        ("native-daemon-mode", vec!["--daemon-runner"]),
     ] {
         report.case(case, "native-fixture", |observed| {
             let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
                 .map(PathBuf::from)
                 .context("current user's home directory is unavailable")?;
-            let mut child = env.fixture(case, "cfuse", Some(&home), &arguments)?;
+            let mut child = env.fixture(case, "fixture-agent", Some(&home), &arguments)?;
             child.assert_listening()?;
             let service = env.scan(&child, observed)?;
             ensure!(
-                service.display_name == executable_name("cfuse"),
+                service.display_name == executable_name("fixture-agent"),
                 "home directory replaced executable name: {}",
                 service.display_name
             );

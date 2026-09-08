@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "cfuse-home-proxy",
+  "id": "native-home-proxy",
   "source": "synthetic",
   "reason": "Independent expected display name for the documented process/path scenario; not a capture from the named application.",
   "platform": "macOs",
@@ -8,10 +8,10 @@
     {
       "pid": 10000,
       "parentPid": 1,
-      "processName": "cfuse",
-      "executable": "/Users/test-user/.local/bin/cfuse",
+      "processName": "fixture-agent",
+      "executable": "/Users/test-user/.local/bin/fixture-agent",
       "arguments": [
-        "/Users/test-user/.local/bin/cfuse",
+        "/Users/test-user/.local/bin/fixture-agent",
         "proxy",
         "--port",
         "9792"
@@ -21,7 +21,7 @@
       "ports": [
         9792
       ],
-      "expectedName": "cfuse"
+      "expectedName": "fixture-agent"
     }
   ]
 }

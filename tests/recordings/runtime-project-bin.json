@@ -1,25 +1,25 @@
 {
   "schemaVersion": 1,
-  "id": "cfuse-hub-daemon",
+  "id": "runtime-project-bin",
   "source": "synthetic",
   "reason": "Independent expected display name for the documented process/path scenario; not a capture from the named application.",
   "platform": "macOs",
   "processes": [
     {
-      "pid": 10001,
+      "pid": 10002,
       "parentPid": 1,
-      "processName": "cfuse",
-      "executable": "/Users/test-user/.local/share/codefuse-cli/versions/v2.6.39/cfuse",
+      "processName": "node",
+      "executable": "/usr/local/bin/node",
       "arguments": [
-        "cfuse",
-        "--cfuse-hub-daemon-runner"
+        "node",
+        "/Users/test-user/.fixture/runtime/fixture-project/bin/server.js"
       ],
-      "cwd": "/Users/test-user",
+      "cwd": "/Users/test-user/.fixture/runtime/fixture-project/bin",
       "startedAt": 1720000000,
       "ports": [
         9792
       ],
-      "expectedName": "cfuse"
+      "expectedName": "fixture-project"
     }
   ]
 }

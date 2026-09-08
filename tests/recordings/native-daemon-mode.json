@@ -1,25 +1,25 @@
 {
   "schemaVersion": 1,
-  "id": "ai-coding-trace-bin",
+  "id": "native-daemon-mode",
   "source": "synthetic",
   "reason": "Independent expected display name for the documented process/path scenario; not a capture from the named application.",
   "platform": "macOs",
   "processes": [
     {
-      "pid": 10002,
+      "pid": 10001,
       "parentPid": 1,
-      "processName": "node",
-      "executable": "/usr/local/bin/node",
+      "processName": "fixture-agent",
+      "executable": "/Users/test-user/.local/share/fixture-agent/versions/v1.0.0/fixture-agent",
       "arguments": [
-        "node",
-        "/Users/test-user/.r2c/runtime/ai-coding-trace/bin/server.js"
+        "fixture-agent",
+        "--daemon-runner"
       ],
-      "cwd": "/Users/test-user/.r2c/runtime/ai-coding-trace/bin",
+      "cwd": "/Users/test-user",
       "startedAt": 1720000000,
       "ports": [
         9792
       ],
-      "expectedName": "ai-coding-trace"
+      "expectedName": "fixture-agent"
     }
   ]
 }
