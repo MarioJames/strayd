@@ -7,7 +7,7 @@
 Strayd 是一个通过 npm 分发的跨平台 Rust TUI/CLI，用来发现、关联和停止散落在本机上的开发服务与临时公网隧道。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/main/docs/screenshots/tui-overview.svg" alt="Strayd TUI：开发服务与 Cloudflare Tunnel 关联视图" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.2/docs/screenshots/tui-overview.svg" alt="Strayd TUI：开发服务与 Cloudflare Tunnel 关联视图" width="100%" />
 </p>
 
 ## 它解决什么
@@ -47,12 +47,22 @@ npx strayd
 
 ## TUI 操作
 
-启动后左侧是资源组，右侧展示端口、进程、工作目录以及隧道到源服务的关联链路。所有停止操作都需要再次确认。
+启动后左侧是资源组，右侧展示端口、进程、创建时间、运行时长、工作目录以及隧道到源服务的关联链路。创建时间按本机时区显示并标明 UTC 偏移；运行时长显示为 `HH:MM:SS`，超过一天时附带天数，界面重绘时自动更新。读取不到时间时显示“未知”。`strayd list` 同样展示时间，JSON 输出中的 `startedAt` 为 Unix 秒（不可用时为 `null`）。所有停止操作都需要再次确认。
+
+展示名按以下来源选择，列表、详情、关联链路与 CLI 使用同一结果：
+
+- macOS `.app` 中的主程序或辅助进程使用外层应用名，例如“测试播放器”“Strayd Test Desk”。
+- 开发框架使用项目目录名；Node、Python、Java、.NET 等解释器优先识别明确的脚本、模块、JAR 或包名，通用的 `server` / `index` 入口回退到项目目录。
+- 普通二进制、系统服务和隧道使用可执行文件名，避免启动目录覆盖 `fixture-agent`、`nginx` 或 `cloudflared` 的名称。
+- 推导项目目录时跳过 `bin`、构建输出、虚拟环境等通用目录；用户主目录、系统根目录及共享根目录不作为项目名。无法确定时回退到可执行文件名、系统进程名或 PID。
+
+命名使用系统提供的结构化参数，不按空格拆分命令；未知的解释器选项不会把后续参数猜成脚本名。JSON 的 `displayName` 是展示名，`processName` 保留系统原始进程名，右侧也单独列出进程名。扫描覆盖所有 TCP 监听进程，因此有监听端口的桌面应用也会出现在“全部”分类中。
 
 | 操作 | 键盘 | 鼠标 |
 | --- | --- | --- |
 | 切换分类 | `←/→`、`Tab`、`Shift+Tab`、`1-4` | 点击顶部完整分类区域 |
 | 选择资源组 | `↑/↓`、`j/k`、`Home/End` | 点击资源行或滚轮 |
+| 滚动右侧详情 | `PageUp` / `PageDown` | 在详情区滚轮 |
 | 创建隐藏规则 | `h` | 点击 `HIDE` / `隐藏` |
 | 勾选规则字段 | `Space` | 点击字段行 |
 | 打开 Settings | `,` | 点击 `SETTINGS` / `设置` |
@@ -74,11 +84,11 @@ TUI 只保留一个停止入口，作用范围由当前分类明确决定：`全
 Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。按 `,` 或点击底部 `Settings / 设置` 打开弹窗，即可查看并移除自己添加的规则。修改会立即写入配置文件并刷新界面。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/main/docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.2/docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/main/docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.2/docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
 </p>
 
 也可以直接维护 TOML。先生成带注释的模板：
@@ -107,7 +117,7 @@ runtimes = ["sshd"]
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/main/docs/screenshots/configuration.svg" alt="Strayd 持久化配置示例" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.2/docs/screenshots/configuration.svg" alt="Strayd 持久化配置示例" width="100%" />
 </p>
 
 每条 `[[display.hide]]` 都是一条独立规则。规则之间是 OR；同一规则中填写的字段是 AND；同一数组内任意值匹配即可。空规则不会隐藏任何内容。
@@ -177,12 +187,15 @@ strayd stop dev --project storefront --all --yes
 
 ```bash
 bun install
+bun install --frozen-lockfile
 bun run test
 bun run check
 bun run pack:cli
 ```
 
-`bun run pack:cli` 只装箱当前宿主的二进制。完整 npm 包由 [build-npm.yml](.github/workflows/build-npm.yml) 在六种原生 runner 上分别构建、测试并统一装箱。
+`bun run pack:cli` 只装箱当前宿主的二进制。完整 npm 包由 [build-npm.yml](https://github.com/MarioJames/strayd/blob/v0.2.2/.github/workflows/build-npm.yml) 在六种原生 runner 上分别构建、测试并统一装箱。
+
+真实进程、PTY、容器、安装包、故障清理和 CI 的运行方式见[测试环境](https://github.com/MarioJames/strayd/blob/v0.2.2/docs/testing-environment.md)。快速运行：`bun scripts/test-env.ts run --suite native,tui,runtime-smoke,faults,replay`；原生 macOS/Windows 与可选系统专项的验证边界在文档中单列。
 
 ## License
 
