@@ -107,7 +107,7 @@ APP_URL='<prepare 返回的 URL>' AGENT_BROWSER_SESSION=strayd-test-env \
 
 journey 检查中英文三个尺寸、真实按键和点击、计时、完整复制、取消与退出，截图及结果写入 `.test-env/browser-evidence`。`scripts/browser-check.ts` 是 CI 的独立服务生命周期入口，也接受外部 `APP_URL`。它使用相同 journey，关闭测试浏览器并停止自身创建的服务；本地 Agent 的正式验收仍以 browser-harness 为入口。
 
-浏览器运行需本机已有 Chrome 或先在测试环境执行 `bunx --no-install agent-browser install`。Bun Terminal 桥接运行在 Linux/macOS；Windows 终端由原生 portable-pty / ConPTY 套件验证，测试端会响应 ConPTY 初始化的光标位置查询。服务最长运行五分钟，正常退出会关闭 PTY、夹具控制管道及 HTTP 服务。
+浏览器运行需本机已有 Chrome 或先在测试环境执行 `bunx --no-install agent-browser install`。Bun Terminal 桥接运行在 Linux/macOS；Windows 终端由原生 portable-pty / ConPTY 套件验证，测试端会响应 ConPTY 初始化的光标位置查询。统一入口自动准备微软官方 `Microsoft.Windows.Console.ConPTY 1.24.260710001` 测试依赖，并校验包及 x64/arm64 文件 SHA-256；DLL 和宿主程序仅放在 `target/debug` 供测试加载，不修改系统组件，也不进入 npm 包。报告记录所用版本、架构和哈希。服务最长运行五分钟，正常退出会关闭 PTY、夹具控制管道及 HTTP 服务。
 
 ## npm 安装包
 

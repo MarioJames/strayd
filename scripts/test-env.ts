@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { arch, platform, release, userInfo } from 'node:os';
 import { parseArgs } from 'node:util';
+import { prepareConpty } from './test-conpty';
 
 const repo = resolve(import.meta.dir, '..');
 const runs = join(repo, '.test-env/runs');
@@ -139,6 +140,9 @@ try {
     if (!values['no-build'] && !Bun.which('cargo')) { report.status = 'blocked'; throw new Error('Cargo is required to build native test artifacts'); }
     if (values['no-build'] && [runner, fixture, strayd].some(file => !existsSync(file))) { report.status = 'blocked'; throw new Error('Native artifacts are missing; run without --no-build'); }
     if (!values['no-build']) await checked(['cargo', 'build', '--locked', '-p', 'port-deck-cli', '-p', 'strayd-test-support'], { limit: 600000 });
+    if (process.platform === 'win32' && selected.includes('tui')) {
+      report.conpty = await prepareConpty(runner, directory, checked);
+    }
     report.artifact_sha256 = createHash('sha256').update(await readFile(strayd)).digest('hex');
     let wrapper: string | undefined;
     if (selected.includes('package')) {

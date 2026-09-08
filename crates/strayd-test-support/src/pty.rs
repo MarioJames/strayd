@@ -171,19 +171,23 @@ impl Session {
         let col = cols * 3 / 4;
         let offset = self.bytes.len();
         self.send(format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").as_bytes())?;
-        let expected = format!("\x1b]52;c;{}\x07", STANDARD.encode(command));
+        let payload = format!("\x1b]52;c;{}", STANDARD.encode(command));
+        let expected = [format!("{payload}\x07"), format!("{payload}\x1b\\")];
         let start = Instant::now();
         loop {
             self.receive()?;
-            if self.bytes[offset..]
-                .windows(expected.len())
-                .any(|bytes| bytes == expected.as_bytes())
-            {
+            if expected.iter().any(|expected| {
+                self.bytes[offset..]
+                    .windows(expected.len())
+                    .any(|bytes| bytes == expected.as_bytes())
+            }) {
                 return Ok(());
             }
             ensure!(
                 start.elapsed() < Duration::from_secs(5),
-                "copy button did not emit the complete command via OSC 52"
+                "copy button did not emit the complete command via OSC 52; output after click={:?}; screen:\n{}",
+                String::from_utf8_lossy(&self.bytes[offset..self.bytes.len().min(offset + 2000)]),
+                self.screen()
             );
         }
     }
