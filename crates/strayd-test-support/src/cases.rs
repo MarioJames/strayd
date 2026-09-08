@@ -124,7 +124,7 @@ pub fn executable_name(name: &str) -> String {
     }
 }
 
-pub fn native(env: &Environment, report: &mut Report, full: bool) {
+pub fn cfuse(env: &Environment, report: &mut Report) {
     for (case, arguments) in [
         ("cfuse-home-proxy", vec!["proxy", "--port", "9792"]),
         ("cfuse-hub-daemon", vec!["--cfuse-hub-daemon-runner"]),
@@ -163,6 +163,10 @@ pub fn native(env: &Environment, report: &mut Report, full: bool) {
             Ok(())
         });
     }
+}
+
+pub fn native(env: &Environment, report: &mut Report, full: bool) {
+    crate::app_mock::run(env, report);
     report.case("unicode-spaced-executable", "native-fixture", |observed| {
         let mut child = env.fixture("unicode directory", "测试 service", None, &[])?;
         let service = env.scan(&child, observed)?;

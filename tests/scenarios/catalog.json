@@ -722,54 +722,6 @@
       ]
     },
     {
-      "id": "real-codefuse",
-      "suite": "real-app",
-      "requires": [
-        "actual-application",
-        "versioned-launcher-manifest"
-      ],
-      "launch": [
-        "${manifest.executable}",
-        "${manifest.args...}"
-      ],
-      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
-      "sources": [
-        "real-app"
-      ]
-    },
-    {
-      "id": "real-wave-music",
-      "suite": "real-app",
-      "requires": [
-        "actual-application",
-        "versioned-launcher-manifest"
-      ],
-      "launch": [
-        "${manifest.executable}",
-        "${manifest.args...}"
-      ],
-      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
-      "sources": [
-        "real-app"
-      ]
-    },
-    {
-      "id": "real-electron-helper",
-      "suite": "real-app",
-      "requires": [
-        "actual-application",
-        "versioned-launcher-manifest"
-      ],
-      "launch": [
-        "${manifest.executable}",
-        "${manifest.args...}"
-      ],
-      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
-      "sources": [
-        "real-app"
-      ]
-    },
-    {
       "id": "ai-coding-trace-bin",
       "suite": "replay",
       "requires": [
@@ -842,6 +794,38 @@
       "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
       "sources": [
         "synthetic"
+      ]
+    },
+    {
+      "id": "mock-wave-music",
+      "suite": "app-mock",
+      "requires": [
+        "native-process",
+        "tcp-listener"
+      ],
+      "launch": [
+        "${fixture-root}/Applications/波点音乐.app/Contents/MacOS/波点音乐"
+      ],
+      "expected": "Actual CLI and native scanner name the listening process 波点音乐; stopping releases its port.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "mock-electron-helper-tree",
+      "suite": "app-mock",
+      "requires": [
+        "native-process",
+        "tcp-listener"
+      ],
+      "launch": [
+        "${fixture-root}/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+        "--fixture-child-executable",
+        "${fixture-root}/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"
+      ],
+      "expected": "Parent and utility helper are distinct listening OS processes named Visual Studio Code. Stopping the parent removes its helper and preserves a same-named independent instance.",
+      "sources": [
+        "native-fixture"
       ]
     }
   ]

@@ -1,6 +1,6 @@
 # Strayd 测试环境
 
-已落地的入口、运行条件和验证边界。生产扫描与停止逻辑仍使用真实系统 API，没有 `--mock-os` 或运行时替换开关。
+测试环境用轻量 mock 程序构造应用目录、命令行、父子进程和 TCP 监听，再由生产扫描器与停止逻辑调用真实系统 API 验证。无需安装 CodeFuse、波点音乐或 Electron；所有应用场景均在临时目录内启动和清理。
 
 ## 快速运行
 
@@ -13,6 +13,9 @@ bun run check
 
 # 一次构建后运行多个套件；默认每个套件最多 180 秒
 bun scripts/test-env.ts run --profile native --suite native,tui,runtime-smoke,faults,replay
+
+# 运行应用 mock：两种 cfuse 参数、波点音乐、Electron 辅助进程树
+bun scripts/test-env.ts run --suite app-mock
 
 # 查看入口、只运行某个场景
 bun scripts/test-env.ts list
@@ -50,9 +53,11 @@ bun scripts/test-env.ts cleanup --run <run-id>
 | `permissions` | 专用容器内，普通用户调用 CLI 和原生终止接口；root 所属进程保持存活，接口返回 SignalDenied |
 | `wsl` | PowerShell 启动 Windows TCP 监听，Linux 夹具在另一个 loopback 地址绑定同端口；只发现 Linux 资源 |
 | `desktop` | macOS LaunchServices 实际启动最小 `.app`，验证 bundle 名称并清理 |
-| `real-app` | 按明确提供的应用启动清单运行 CodeFuse、波点音乐、Electron 辅助进程；缺少某个实际应用即 blocked |
+| `app-mock` | cfuse 两种参数、波点音乐 `.app` 路径、Electron 主进程及 utility helper；真实 CLI/采集器检查名称与端口，停止父子树并保留同名对照实例；无需安装应用 |
 
 固定日期、时区、运行时长边界、分类、关联、跨平台请求等规则契约继续由既有 Cargo 测试覆盖。集成套件没有替换它们，也不把宿主所有资源的数量或排序当成预期。
+
+`app-mock` 已纳入 `smoke` 和 `native`，随普通 CI 执行。`.app` 目录可在各宿主上构造并执行本机格式的夹具；Linux/Windows 的通过只证明这些路径的识别契约，macOS LaunchServices 另由可选 `desktop` 套件验证。
 
 `tests/scenarios/catalog.json` 记录场景 ID、能力、启动模板和独立预期，契约会进入报告。实际 PID、端口和时间来自 OS 子进程句柄、实际 bind 后的 ready 消息、启动前后时间区间；没有先占端口再释放给夹具。名称预期来自明确规则和录制文件中的字面量，不由生产命名函数生成。
 
@@ -113,7 +118,7 @@ bun scripts/test-env.ts run --suite package,tui --artifact dist/npm/strayd-0.2.1
 
 包安装在含空格的临时目录，经 `node .../bin/strayd.cjs` 进入真实原生程序。测试完成后删掉安装目录。`package,tui` 同时检查 TTY；只运行 Cargo 产物不能替代安装包验收。默认本地 pack 只有当前平台二进制，不能据此声称六个平台都验证过。测试 crate 标记 `publish = false`，npm 文件清单继续限定为 bin/native/说明文件。
 
-## 专项机器与真实应用
+## 可选系统专项
 
 专项入口会附加对应的必需套件，不能用普通 smoke 绕过专项能力检查：
 
@@ -121,30 +126,11 @@ bun scripts/test-env.ts run --suite package,tui --artifact dist/npm/strayd-0.2.1
 bun scripts/test-env.ts run --profile systemd-vm --suite lifecycle
 bun scripts/test-env.ts run --profile wsl --suite native
 bun scripts/test-env.ts run --profile desktop --suite native
-STRAYD_REAL_APP_MANIFEST=/absolute/path/apps.json \
-  bun scripts/test-env.ts run --profile real-app --suite real-app
 ```
 
 systemd 默认使用当前用户的 manager。一次性 VM 的系统 manager 可设置 `STRAYD_TEST_SYSTEMD_SCOPE=system`。unit 名带测试前缀和唯一身份，设置 `RuntimeMaxSec=120`，stop 前验证扫描所得关系，清理账本记录该 unit。不要让通用 PID 用例停止 runner 自己的 systemd unit。
 
 WSL 需启用 PowerShell interoperability；Windows 监听由本次启动的 PowerShell 进程持有，控制管道关闭或 15 秒上限后释放。127.0.0.1 与 127.0.0.2 用于避免镜像网络中同地址的端口冲突，本测试不修改 WSL 网络设置。
-
-`real-app.example.json` 默认为空清单，运行结果必然 blocked。正式清单的 `applications` 数组按下列字段填写；可用 `--scenario real-codefuse` 只验证该应用：
-
-```json
-{
-  "applications": [{
-    "id": "real-codefuse",
-    "executable": "/absolute/path/to/actual/app",
-    "args": ["<该版本实际支持的前台启动参数>"],
-    "cwd": "/isolated/test/profile",
-    "version": "<操作者核对的实际安装版本>",
-    "expected_name": "cfuse"
-  }]
-}
-```
-
-另两个固定 ID 为 `real-wave-music`、`real-electron-helper`。必须在专用测试账号/设备上，以独立配置、前台进程启动，不能连接用户正在使用的实例。版本来源在报告中标记为 operator-verified-manifest；运行器不猜测 GUI 应用通用的版本命令。报告只记录所启动 PID 的名称、端口和时间，默认不写应用完整命令行。清理覆盖仍存活的自有进程及其后代；会脱离父进程后台化的第三方启动器不属于此启动协议。
 
 ## CI 门禁
 
@@ -154,7 +140,7 @@ WSL 需启用 PowerShell interoperability；Windows 监听由本次启动的 Pow
 | `extended-test.yml` | 每日/手动：六架构、完整运行时、稳定性、离线 SSH、权限容器，以及独立专项 runner |
 | `build-npm.yml` | 六架构原生测试后统一装箱，再在六种原生 runner 上安装同一个 tgz 并验证 CLI/TTY |
 
-四个专项 runner 标签为 `strayd-systemd`、`strayd-wsl`、`strayd-desktop`、`strayd-real-apps`；在专用机器配置好 Rust/Bun/依赖和登录态后，设置仓库变量 `STRAYD_SPECIAL_RUNNERS=enabled`。未接入时 availability 输出 blocked 并返回非零，扩展 workflow 不能因此显示完整通过。
+三个可选专项 runner 标签为 `strayd-systemd`、`strayd-wsl`、`strayd-desktop`；配置好对应系统能力后，设置仓库变量 `STRAYD_SPECIAL_RUNNERS=enabled`。未启用时 availability 记录 not-requested，不阻塞 mock 验收；显式运行某个专项而缺少能力仍返回 blocked。没有第三方应用安装任务。
 
 报告由 always artifact 步骤上传，清理失败使运行失败。本次只修改本地 workflow，没有 push 或 dispatch，因此尚无远端 CI 执行结论。GitHub runner 的实际 OS 镜像版本仍随每次报告记录；六架构构建成功不能证明最低 macOS/Windows/glibc 版本兼容。
 
@@ -162,7 +148,7 @@ WSL 需启用 PowerShell interoperability；Windows 监听由本次启动的 Pow
 
 2026-09-08，Linux x64 / WSL2 6.6.87.2：原生、CLI、PTY、回放、稳定性、运行器故障清理、systemd 用户临时服务、WSL Windows/Linux 同端口、npm 安装包与浏览器交互已实测。Linux 容器的基础和完整运行时、跨用户权限也已实测；离线 SSH 场景使用本地真实协议对端，无公网依赖。
 
-macOS/Windows 原生采集与六架构包安装已配置 CI，尚未在本次会话实际运行；macOS LaunchServices 和真实 CodeFuse/波点音乐/Electron 仍需相应机器与软件。现有 synthetic 录制和改名夹具均不计入这些实际应用的通过结果。
+macOS/Windows 原生采集与六架构包安装已配置 CI，尚未在本次会话实际运行；macOS LaunchServices 仍需相应机器。四个应用 mock 场景（cfuse proxy/daemon、波点音乐、Electron 父子树）已在本机通过，并完成自有进程和临时目录清理。应用 mock 验证进程发现、命名和停止等 Strayd 契约，不验证第三方应用内部功能。
 
 ## 清理与证据边界
 

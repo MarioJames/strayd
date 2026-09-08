@@ -249,60 +249,6 @@ pub fn desktop(env: &Environment, report: &mut Report) {
     });
 }
 
-pub fn real_app(env: &Environment, report: &mut Report) {
-    let Some(manifest) = std::env::var_os("STRAYD_REAL_APP_MANIFEST") else {
-        for id in ["real-codefuse", "real-wave-music", "real-electron-helper"] {
-            report.unavailable(id, "real-app", true, "no versioned application launcher manifest; synthetic fixtures do not validate this application");
-        }
-        return;
-    };
-    let parsed =
-        (|| -> Result<serde_json::Value> { Ok(serde_json::from_slice(&fs::read(manifest)?)?) })();
-    let manifest = match parsed {
-        Ok(value) => value,
-        Err(error) => {
-            report.case("real-launcher-manifest", "real-app", |_| Err(error));
-            return;
-        }
-    };
-    for id in ["real-codefuse", "real-wave-music", "real-electron-helper"] {
-        let value = manifest["applications"]
-            .as_array()
-            .and_then(|apps| apps.iter().find(|app| app["id"] == id));
-        let Some(value) = value else {
-            report.unavailable(
-                id,
-                "real-app",
-                true,
-                "application is not configured in the versioned launcher manifest",
-            );
-            continue;
-        };
-        report.case(id, "real-app", |observed| {
-        let exe = value["executable"].as_str().context("manifest executable")?;
-        let expected = value["expected_name"].as_str().context("manifest expected_name")?;
-        let version = value["version"].as_str().filter(|v| !v.is_empty()).context("manifest version")?;
-        let mut command = Command::new(exe);
-        for arg in value["args"].as_array().context("manifest args array")? { command.arg(arg.as_str().context("argument must be text")?); }
-        command.current_dir(value["cwd"].as_str().context("manifest cwd")?);
-        let mut child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-        if let Err(error) = env.registry.register(child.id()) { let _ = child.kill(); let _ = child.wait(); return Err(error); }
-        let result = (|| -> Result<()> {
-            let mut found = None;
-            until(Duration::from_secs(15), || {
-                found = scan_all().groups.into_iter().flat_map(|g| g.services).find(|s| s.pid == child.id()); Ok(found.is_some())
-            })?;
-            let service = found.unwrap();
-            ensure!(service.display_name == expected, "expected {expected}, got {}", service.display_name);
-            // Only the owned PID is recorded. Do not persist arbitrary app command lines/secrets.
-            observed.push(json!({"version":version,"version_source":"operator-verified-manifest","display_name":service.display_name,"pid":service.pid,"ports":service.ports,"started_at":service.started_at}));
-            Ok(())
-        })();
-        let cleanup = env.registry.cleanup(); let _ = child.wait(); result.and(cleanup)
-        });
-    }
-}
-
 pub fn wsl(env: &Environment, report: &mut Report) {
     if !sysinfo::System::kernel_version()
         .unwrap_or_default()

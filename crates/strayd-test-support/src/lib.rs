@@ -1,3 +1,4 @@
+pub mod app_mock;
 pub mod browser;
 pub mod cases;
 pub mod process;

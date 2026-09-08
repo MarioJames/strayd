@@ -109,7 +109,15 @@ fn main() -> Result<()> {
         .unwrap_or(0);
     ensure!(child_count <= 8, "fixture supports at most eight children");
     for _ in 0..child_count {
-        let mut child = Command::new(std::env::current_exe()?)
+        let child_executable = value("--fixture-child-executable")
+            .map(PathBuf::from)
+            .unwrap_or(std::env::current_exe()?);
+        let child_args = args
+            .windows(2)
+            .filter(|pair| pair[0] == "--fixture-child-arg")
+            .map(|pair| pair[1].as_str());
+        let mut child = Command::new(child_executable)
+            .args(child_args)
             .args([
                 "--fixture-lifetime-ms",
                 &value("--fixture-child-lifetime-ms").unwrap_or_else(|| lifetime.to_string()),

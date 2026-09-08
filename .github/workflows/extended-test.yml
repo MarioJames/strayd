@@ -68,7 +68,7 @@ jobs:
           name: isolated-linux
           path: .test-env/runs/
           include-hidden-files: true
-  # Opt-in dedicated machines; the availability report below makes absent runners explicit.
+  # Optional OS-specific machines; application mocks run in the native job.
   special:
     if: vars.STRAYD_SPECIAL_RUNNERS == 'enabled'
     strategy:
@@ -84,9 +84,6 @@ jobs:
           - label: strayd-desktop
             profile: desktop
             suite: native
-          - label: strayd-real-apps
-            profile: real-app
-            suite: real-app
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 20
     steps:

@@ -11,8 +11,8 @@ const suffix = process.platform === 'win32' ? '.exe' : '';
 const runner = join(repo, 'target/debug/strayd-test-runner' + suffix);
 const fixture = join(repo, 'target/debug/fixture-process' + suffix);
 const strayd = join(repo, 'target/debug/strayd' + suffix);
-const suites = ['smoke', 'native', 'cli', 'lifecycle', 'faults', 'tui', 'runtime-smoke', 'runtimes', 'replay', 'package', 'stability', 'systemd', 'permissions', 'desktop', 'wsl', 'real-app', 'tunnel'];
-const profiles = ['native', 'linux-container', 'replay', 'systemd-vm', 'permissions-container', 'wsl', 'desktop', 'real-app'];
+const suites = ['smoke', 'native', 'cli', 'lifecycle', 'faults', 'tui', 'runtime-smoke', 'runtimes', 'replay', 'package', 'stability', 'systemd', 'permissions', 'desktop', 'wsl', 'app-mock', 'tunnel'];
+const profiles = ['native', 'linux-container', 'replay', 'systemd-vm', 'permissions-container', 'wsl', 'desktop'];
 const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: {
   profile: { type: 'string', default: 'native' }, suite: { type: 'string', default: 'smoke' },
   scenario: { type: 'string' }, artifact: { type: 'string' }, run: { type: 'string' },
@@ -95,7 +95,7 @@ const report: any = { schema_version: 1, run_id: id, profile: values.profile, re
 let exitCode = 1;
 try {
   if (!profiles.includes(values.profile!)) throw new Error(`Unknown profile ${values.profile}`);
-  const special: Record<string, string> = { 'systemd-vm': 'systemd', 'permissions-container': 'permissions', wsl: 'wsl', desktop: 'desktop', 'real-app': 'real-app' };
+  const special: Record<string, string> = { 'systemd-vm': 'systemd', 'permissions-container': 'permissions', wsl: 'wsl', desktop: 'desktop' };
   const selected = [...new Set(values.profile === 'replay' ? ['replay'] : [...values.suite!.split(','), ...(special[values.profile!] ? [special[values.profile!]] : [])])];
   if (selected.some(suite => !suites.includes(suite))) throw new Error(`Unknown suite ${values.suite}`);
   if (values.profile!.endsWith('container') && selected.includes('package')) { report.status = 'blocked'; throw new Error('Package installation runs on native runners; use --profile native --suite package --artifact <tgz>'); }

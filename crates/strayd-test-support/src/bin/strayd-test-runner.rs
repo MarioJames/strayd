@@ -121,7 +121,7 @@ fn run(args: Args) -> Result<bool> {
         "systemd" => special::systemd(&env, &mut report),
         "permissions" => special::permissions(&env, &mut report),
         "desktop" => special::desktop(&env, &mut report),
-        "real-app" => special::real_app(&env, &mut report),
+        "app-mock" => strayd_test_support::app_mock::run(&env, &mut report),
         "wsl" => special::wsl(&env, &mut report),
         "tunnel" => strayd_test_support::tunnel::run(&env, &mut report),
         "replay" => replay::run(&env.repository.join("tests/recordings"), &mut report)?,
