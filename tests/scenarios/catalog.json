@@ -1,0 +1,848 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "platforms": [
+      "linux",
+      "windows",
+      "macos"
+    ],
+    "timeout_ms": 180000,
+    "cwd": "unique scratch directory (home only for explicit home-directory cases)",
+    "versions": "actual OS, artifact hash, runtime versions and image ID in each run report",
+    "actions": [
+      "scan-owned",
+      "independent-cleanup"
+    ],
+    "assertions": "Rust support runner; literal expectations never obtained by calling the production naming function",
+    "timeout_scope": "Outer suite deadline; readiness and actions have shorter Rust deadlines"
+  },
+  "cases": [
+    {
+      "id": "cfuse-home-proxy",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture:cfuse}",
+        "proxy",
+        "--port",
+        "9792"
+      ],
+      "expected": "Executable is cfuse despite the home working directory.",
+      "sources": [
+        "native-fixture",
+        "synthetic"
+      ]
+    },
+    {
+      "id": "cfuse-hub-daemon",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture:cfuse}",
+        "--cfuse-hub-daemon-runner"
+      ],
+      "expected": "Executable is cfuse for the daemon runner arguments.",
+      "sources": [
+        "native-fixture",
+        "synthetic"
+      ]
+    },
+    {
+      "id": "unicode-spaced-executable",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture:测试 service}"
+      ],
+      "expected": "The complete Chinese and spaced filename is preserved.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "multi-port-listener",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-ports",
+        "2",
+        "--fixture-wildcard"
+      ],
+      "expected": "Both dynamically bound TCP ports appear once, sorted.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "ipv6-listener",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "ipv6"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-ipv6"
+      ],
+      "expected": "The actual IPv6 listener is discovered as ::1.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "non-listener-and-scanner-excluded",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "udp"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-ports",
+        "0",
+        "--fixture-udp"
+      ],
+      "expected": "UDP-only fixture and scanning process are excluded.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "same-port-multiple-loopback-addresses",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "loopback-alias"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-same-port"
+      ],
+      "expected": "Both addresses accept connections; the port is listed once.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "process-exits-during-scan",
+      "suite": "native",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture}"
+      ],
+      "expected": "Concurrent exit does not panic and the next scan has no stale fixture.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "child-exits-before-parent-stop",
+      "suite": "lifecycle",
+      "requires": [
+        "owned-process-tree"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-children",
+        "1",
+        "--fixture-child-lifetime-ms",
+        "250"
+      ],
+      "expected": "Stopping the parent succeeds after its child exits.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "identity-mismatch-refuses-stop",
+      "suite": "lifecycle",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture}"
+      ],
+      "expected": "A wrong start token yields ProcessChanged and preserves the process.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "protected-sshd-fixture",
+      "suite": "lifecycle",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture:sshd}"
+      ],
+      "expected": "A fixture named sshd is protected; this is not a real SSH daemon.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "stop-tree-preserves-control",
+      "suite": "lifecycle",
+      "requires": [
+        "owned-process-tree"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-children",
+        "2"
+      ],
+      "expected": "Only the owned tree disappears; a separate control remains alive.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "term-timeout-forces-kill",
+      "suite": "lifecycle",
+      "requires": [
+        "unix-signals"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-ignore-term"
+      ],
+      "expected": "An owned process ignoring TERM is forcibly stopped.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "process-disappears-before-stop",
+      "suite": "lifecycle",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture}"
+      ],
+      "expected": "An already exited process yields ProcessMissing.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "cli-list-filter-and-stop-contract",
+      "suite": "cli",
+      "requires": [
+        "native-cli"
+      ],
+      "launch": [
+        "${strayd}",
+        "--no-config",
+        "list",
+        "--port",
+        "${owned-port}",
+        "--json"
+      ],
+      "expected": "Actual CLI filters, dry-run, noninteractive rejection and confirmed stop preserve ownership.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "cli-isolated-config-and-failure",
+      "suite": "cli",
+      "requires": [
+        "native-cli",
+        "isolated-config"
+      ],
+      "launch": [
+        "${strayd}",
+        "--config",
+        "${isolated-config}",
+        "config",
+        "init"
+      ],
+      "expected": "init/show/path, hide bypass, invalid configuration and impossible write paths behave correctly.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "cli-non-tty-and-exit-status",
+      "suite": "cli",
+      "requires": [
+        "native-cli"
+      ],
+      "launch": [
+        "${strayd}",
+        "--version"
+      ],
+      "expected": "Version succeeds; invalid arguments and a piped TUI fail.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "startup-failure-cleanup",
+      "suite": "faults",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-fail"
+      ],
+      "expected": "Startup failure is reported; the child is reaped.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "readiness-timeout-cleanup",
+      "suite": "faults",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-no-ready"
+      ],
+      "expected": "Missing readiness times out and the owned process is cleaned.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "assertion-failure-cleans-fixture",
+      "suite": "faults",
+      "requires": [
+        "owned-process"
+      ],
+      "launch": [
+        "${fixture}"
+      ],
+      "expected": "An assertion error releases the scope's live fixture.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "repeated-concurrent-listeners",
+      "suite": "stability",
+      "requires": [
+        "owned-process",
+        "tcp"
+      ],
+      "launch": [
+        "${fixture}",
+        "--fixture-ports",
+        "3"
+      ],
+      "expected": "Five rounds of eight same-name processes with three ports lose no resources.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "macos-app-bundle",
+      "suite": "native",
+      "requires": [
+        "macos"
+      ],
+      "launch": [
+        "${app}/Contents/MacOS/fixture"
+      ],
+      "expected": "Direct execution from 测试应用.app displays the bundle name.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "macos-launchservices",
+      "suite": "desktop",
+      "requires": [
+        "macos",
+        "gui-session"
+      ],
+      "launch": [
+        "open",
+        "-n",
+        "-a",
+        "${app}",
+        "--args",
+        "--fixture-detached"
+      ],
+      "expected": "LaunchServices starts the owned app bundle and the bundle name is discovered.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "systemd-owned-unit",
+      "suite": "systemd",
+      "requires": [
+        "linux",
+        "systemd-manager"
+      ],
+      "launch": [
+        "systemd-run",
+        "--collect",
+        "--unit",
+        "${owned-unit}",
+        "${fixture}"
+      ],
+      "expected": "Only the owned transient unit is stopped; a stale unit relationship is refused.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "cross-user-stop-denied",
+      "suite": "permissions",
+      "requires": [
+        "isolated-linux-container",
+        "root-orchestrator",
+        "tester-user"
+      ],
+      "launch": [
+        "runuser",
+        "-u",
+        "tester",
+        "--",
+        "${strayd}",
+        "--no-config",
+        "stop",
+        "resource",
+        "--id",
+        "${owned-id}",
+        "--yes"
+      ],
+      "expected": "An unprivileged scanner cannot stop a root-owned process; the engine returns SignalDenied.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "wsl-native-boundary",
+      "suite": "wsl",
+      "requires": [
+        "wsl2",
+        "powershell-interop"
+      ],
+      "launch": [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "${bounded-listener-script}"
+      ],
+      "expected": "Windows and Linux bind the same port; only the Linux resource is discovered.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "local-ssh-reverse-forward",
+      "suite": "tunnel",
+      "requires": [
+        "openssh-client",
+        "node",
+        "python-paramiko"
+      ],
+      "launch": [
+        "ssh",
+        "-N",
+        "-R",
+        "0:127.0.0.1:${source-port}",
+        "strayd-fixture@127.0.0.1"
+      ],
+      "expected": "Real OpenSSH forwards a known payload, groups with the source, and stops without killing the source.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "browser-fixture-lifecycle",
+      "suite": "browser-setup",
+      "requires": [
+        "bun-terminal",
+        "xterm",
+        "browser"
+      ],
+      "launch": [
+        "${strayd}",
+        "--config",
+        "${isolated-config}",
+        "tui",
+        "--refresh",
+        "0"
+      ],
+      "expected": "Only owned fixtures are shown through the real PTY, with independent cleanup.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "tui-en-lifecycle",
+      "suite": "tui",
+      "requires": [
+        "pty",
+        "en",
+        "native-cli"
+      ],
+      "launch": [
+        "${strayd}",
+        "--language",
+        "en",
+        "tui",
+        "--refresh",
+        "0"
+      ],
+      "expected": "Uptime advances, full commands copy after scroll/resize, selection resets, hide persists, confirm/cancel preserve ownership, terminal restores.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "tui-zh-cn-lifecycle",
+      "suite": "tui",
+      "requires": [
+        "pty",
+        "zh-cn",
+        "native-cli"
+      ],
+      "launch": [
+        "${strayd}",
+        "--language",
+        "zh-cn",
+        "tui",
+        "--refresh",
+        "0"
+      ],
+      "expected": "Uptime advances, full commands copy after scroll/resize, selection resets, hide persists, confirm/cancel preserve ownership, terminal restores.",
+      "actions": [
+        "scan-owned",
+        "stop-owned-or-refuse",
+        "independent-cleanup"
+      ],
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-node",
+      "suite": "runtimes",
+      "requires": [
+        "node"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-node-title",
+      "suite": "runtimes",
+      "requires": [
+        "linux"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-bun",
+      "suite": "runtimes",
+      "requires": [
+        "bun"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-python",
+      "suite": "runtimes",
+      "requires": [
+        "python"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-python-module",
+      "suite": "runtimes",
+      "requires": [
+        "python-module"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "trace_probe is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-deno",
+      "suite": "runtimes",
+      "requires": [
+        "deno"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "ai-coding-trace is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-java",
+      "suite": "runtimes",
+      "requires": [
+        "java"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "orders is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "runtime-dotnet",
+      "suite": "runtimes",
+      "requires": [
+        "dotnet"
+      ],
+      "launch": [
+        "${runtime}",
+        "${runtime-specific-arguments...}"
+      ],
+      "expected": "Orders is obtained from the actual runtime's entry/module/JAR/DLL or project directory.",
+      "sources": [
+        "native-fixture"
+      ]
+    },
+    {
+      "id": "real-codefuse",
+      "suite": "real-app",
+      "requires": [
+        "actual-application",
+        "versioned-launcher-manifest"
+      ],
+      "launch": [
+        "${manifest.executable}",
+        "${manifest.args...}"
+      ],
+      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
+      "sources": [
+        "real-app"
+      ]
+    },
+    {
+      "id": "real-wave-music",
+      "suite": "real-app",
+      "requires": [
+        "actual-application",
+        "versioned-launcher-manifest"
+      ],
+      "launch": [
+        "${manifest.executable}",
+        "${manifest.args...}"
+      ],
+      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
+      "sources": [
+        "real-app"
+      ]
+    },
+    {
+      "id": "real-electron-helper",
+      "suite": "real-app",
+      "requires": [
+        "actual-application",
+        "versioned-launcher-manifest"
+      ],
+      "launch": [
+        "${manifest.executable}",
+        "${manifest.args...}"
+      ],
+      "expected": "Unavailable unless the actual versioned application and its launch profile are supplied.",
+      "sources": [
+        "real-app"
+      ]
+    },
+    {
+      "id": "ai-coding-trace-bin",
+      "suite": "replay",
+      "requires": [
+        "recording"
+      ],
+      "launch": [
+        "read-only-recording",
+        "ai-coding-trace-bin"
+      ],
+      "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
+      "sources": [
+        "synthetic"
+      ]
+    },
+    {
+      "id": "macos-application",
+      "suite": "replay",
+      "requires": [
+        "recording"
+      ],
+      "launch": [
+        "read-only-recording",
+        "macos-application"
+      ],
+      "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
+      "sources": [
+        "synthetic"
+      ]
+    },
+    {
+      "id": "windows-spaced-path",
+      "suite": "replay",
+      "requires": [
+        "recording"
+      ],
+      "launch": [
+        "read-only-recording",
+        "windows-spaced-path"
+      ],
+      "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
+      "sources": [
+        "synthetic"
+      ]
+    },
+    {
+      "id": "linux-changed-title",
+      "suite": "replay",
+      "requires": [
+        "recording"
+      ],
+      "launch": [
+        "read-only-recording",
+        "linux-changed-title"
+      ],
+      "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
+      "sources": [
+        "synthetic"
+      ]
+    },
+    {
+      "id": "missing-process-fields",
+      "suite": "replay",
+      "requires": [
+        "recording"
+      ],
+      "launch": [
+        "read-only-recording",
+        "missing-process-fields"
+      ],
+      "expected": "Expected display names are literal values in the recording, independent of the production naming function.",
+      "sources": [
+        "synthetic"
+      ]
+    }
+  ]
+}

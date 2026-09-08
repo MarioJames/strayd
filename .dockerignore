@@ -1,0 +1,7 @@
+target
+.git
+.test-env
+.browser-harness
+node_modules
+dist
+npm/strayd/native

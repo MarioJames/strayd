@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=strayd-test:local
+FROM mcr.microsoft.com/dotnet/sdk:8.0.414-bookworm-slim@sha256:ff8311847c54c04d1a14c488362807997d59b61372da5095a95f89cbcda7f9b7 AS dotnet
+FROM denoland/deno:2.5.6@sha256:3ea71953ff50e3ff15c377ead1a8521f624e2f43d27713675a8bed7b33f166aa AS deno
+FROM ${BASE_IMAGE}
+USER root
+COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
+COPY --from=deno /usr/bin/deno /usr/local/bin/deno
+RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+USER tester

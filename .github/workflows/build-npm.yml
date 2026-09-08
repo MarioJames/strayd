@@ -42,10 +42,14 @@ jobs:
             source: target/aarch64-apple-darwin/release/strayd
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: ${{ matrix.target }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
       - run: cargo test --workspace
+      - run: bun scripts/test-env.ts run --suite native,tui,faults --run release-native
       - run: cargo build --release -p port-deck-cli --target ${{ matrix.target }}
       - name: Stage native binary
         shell: bash
@@ -58,6 +62,13 @@ jobs:
           path: npm-native/${{ matrix.artifact }}
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-test-${{ matrix.artifact }}
+          path: .test-env/runs/
+          include-hidden-files: true
+
   package:
     needs: native
     runs-on: ubuntu-24.04
@@ -67,10 +78,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.12
       - uses: actions/download-artifact@v5
         with:
           path: npm/strayd/native
+          pattern: native-*
           merge-multiple: true
       - run: chmod +x npm/strayd/native/strayd-linux-* npm/strayd/native/strayd-darwin-*
       - run: mkdir -p dist/npm && cd npm/strayd && bun pm pack --destination ../../dist/npm
@@ -79,3 +91,43 @@ jobs:
           name: strayd-npm
           path: dist/npm/*.tgz
           if-no-files-found: error
+
+  installed-package:
+    needs: package
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, arch: x64, platform: linux-x64 }
+          - { os: ubuntu-24.04-arm, arch: arm64, platform: linux-arm64 }
+          - { os: windows-2025, arch: x64, platform: win32-x64 }
+          - { os: windows-11-arm, arch: arm64, platform: win32-arm64 }
+          - { os: macos-15-intel, arch: x64, platform: darwin-x64 }
+          - { os: macos-15, arch: arm64, platform: darwin-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v5
+        with:
+          name: strayd-npm
+          path: dist/npm
+      - run: bun scripts/test-package.ts dist/npm
+        env:
+          STRAYD_EXPECT_PLATFORM: ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-${{ matrix.os }}
+          path: .test-env/runs/
+          include-hidden-files: true

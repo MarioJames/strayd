@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>Strayd 真实终端验收</title>
+<link rel="stylesheet" href="/xterm.css"><style>
+body{margin:20px;background:#080e16;color:#d3deea;font:14px system-ui}nav{display:flex;gap:12px;margin-bottom:16px;align-items:center}button,select{background:#182638;color:#e7f1ff;border:1px solid #445670;padding:7px 12px;border-radius:4px}#terminal{width:max-content;border:1px solid #354660}output{color:#8fc8a7}h1{font-size:18px;font-weight:500}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:1000px}
+</style></head><body><h1>Strayd · 真实 PTY</h1>
+<nav><label>语言 <select id="language"><option value="en">English</option><option value="zh-cn">简体中文</option></select></label>
+<button id="start">启动终端</button><button data-cols="132" data-rows="40">132 × 40</button><button data-cols="100" data-rows="18">100 × 18</button><button data-cols="80" data-rows="24">80 × 24</button><output id="status">正在连接</output></nav>
+<div id="terminal"></div><details><summary>复制的完整命令</summary><pre id="clipboard"></pre></details>
+<script src="/xterm.js"></script><script>
+const term=new Terminal({cols:132,rows:40,fontFamily:'monospace',fontSize:13,theme:{background:'#080e16'},allowProposedApi:true});term.open(document.querySelector('#terminal'));
+const socket=new WebSocket(`ws://${location.host}/socket?token=__TOKEN__`);let fixture=[];let raw='';let exited=null;
+socket.onopen=()=>document.querySelector('#status').textContent='已连接';
+socket.onmessage=event=>{const value=JSON.parse(event.data);if(value.type==='fixture')fixture=value.services;if(value.type==='output'){const data=Uint8Array.from(atob(value.data),c=>c.charCodeAt(0));raw+=new TextDecoder().decode(data);term.write(data);}if(value.type==='exit'){exited=value.code;document.querySelector('#status').textContent=`已退出 (${value.code})`;}};
+term.onData(data=>socket.send(JSON.stringify({type:'input',data})));
+term.parser.registerOscHandler(52,data=>{const encoded=data.slice(data.indexOf(';')+1);document.querySelector('#clipboard').textContent=new TextDecoder().decode(Uint8Array.from(atob(encoded),c=>c.charCodeAt(0)));return true;});
+document.querySelector('#start').onclick=()=>{socket.send(JSON.stringify({type:'start',language:document.querySelector('#language').value}));document.querySelector('#start').disabled=true;term.focus();};
+document.querySelectorAll('[data-cols]').forEach(button=>button.onclick=()=>{const cols=Number(button.dataset.cols),rows=Number(button.dataset.rows);term.resize(cols,rows);socket.send(JSON.stringify({type:'resize',cols,rows}));term.focus();});
+window.straydTest={term,get fixture(){return fixture},get raw(){return raw},get exited(){return exited},screen:()=>Array.from({length:term.rows},(_,row)=>term.buffer.active.getLine(row)?.translateToString(true)||'').join('\n')};
+</script></body></html>

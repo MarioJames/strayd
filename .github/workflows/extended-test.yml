@@ -1,0 +1,118 @@
+name: Extended test
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm, macos-15-intel, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.13'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.11'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.414'
+      - uses: Swatinem/rust-cache@v2
+      - run: bun scripts/test-env.ts run --suite native,tui,runtimes,stability,faults --run ci-extended
+      - name: Independent cleanup
+        if: always()
+        run: bun scripts/test-env.ts cleanup --run ci-extended
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: extended-${{ matrix.os }}
+          path: .test-env/runs/
+          include-hidden-files: true
+  linux-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+      - run: docker build -f tests/environments/linux/Dockerfile -t strayd-test:local .
+      - run: docker build -f tests/environments/linux/Dockerfile.extended -t strayd-test:extended .
+      - run: bun scripts/test-env.ts run --profile linux-container --suite native,tui,runtimes,stability,tunnel --image strayd-test:extended --run ci-container
+      - run: bun scripts/test-env.ts run --profile permissions-container --suite permissions --image strayd-test:local --run ci-permissions
+      - run: bun test tests/container-runner.test.ts
+        env:
+          STRAYD_TEST_IMAGE: strayd-test:local
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: isolated-linux
+          path: .test-env/runs/
+          include-hidden-files: true
+  # Opt-in dedicated machines; the availability report below makes absent runners explicit.
+  special:
+    if: vars.STRAYD_SPECIAL_RUNNERS == 'enabled'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: strayd-systemd
+            profile: systemd-vm
+            suite: lifecycle
+          - label: strayd-wsl
+            profile: wsl
+            suite: native
+          - label: strayd-desktop
+            profile: desktop
+            suite: native
+          - label: strayd-real-apps
+            profile: real-app
+            suite: real-app
+    runs-on: [self-hosted, '${{ matrix.label }}']
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bun scripts/test-env.ts run --profile ${{ matrix.profile }} --suite ${{ matrix.suite }} --run ci-special
+      - if: always()
+        run: bun scripts/test-env.ts cleanup --run ci-special
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.label }}
+          path: .test-env/runs/
+          include-hidden-files: true
+  availability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+      - run: bun scripts/special-availability.ts
+        env:
+          STRAYD_SPECIAL_RUNNERS: ${{ vars.STRAYD_SPECIAL_RUNNERS }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: special-availability
+          path: .test-env/special-availability.json
+          include-hidden-files: true

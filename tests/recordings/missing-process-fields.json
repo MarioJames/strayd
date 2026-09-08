@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "missing-process-fields",
+  "source": "synthetic",
+  "reason": "Independent expected display name for the documented process/path scenario; not a capture from the named application.",
+  "platform": "linux",
+  "processes": [
+    {
+      "pid": 10006,
+      "parentPid": 1,
+      "processName": "opaque",
+      "executable": null,
+      "arguments": [],
+      "cwd": null,
+      "startedAt": null,
+      "ports": [
+        9792
+      ],
+      "expectedName": "opaque"
+    }
+  ]
+}
