@@ -178,6 +178,9 @@ try {
   }
   if (report.suite_error) {
     const cases = report.suites.flatMap((suite: any) => suite.cases ?? []);
+    for (const item of cases.filter((item: any) => ['fail', 'blocked'].includes(item.status))) {
+      console.error(`${item.id}: ${item.status}: ${String(item.reason ?? 'No reason recorded').slice(0, 6000)}`);
+    }
     const failed = report.suites.some((suite: any) => !suite.cases?.length || suite.cleanup !== 'pass') || cases.some((item: any) => item.status === 'fail');
     report.status = cases.some((item: any) => item.status === 'blocked') && !failed ? 'blocked' : 'fail';
     throw new Error('One or more required suites did not pass; inspect per-case reports');

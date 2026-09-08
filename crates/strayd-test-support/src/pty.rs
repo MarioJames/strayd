@@ -14,6 +14,7 @@ use crate::{cases::Environment, process::alive, report::Report};
 #[derive(Default)]
 struct CursorQuery {
     matched: usize,
+    replies: usize,
 }
 
 impl CursorQuery {
@@ -35,8 +36,12 @@ impl CursorQuery {
             };
             if self.matched == REQUEST.len() {
                 let (row, col) = parser.screen().cursor_position();
-                write!(writer, "\x1b[{};{}R", row + 1, col + 1)?;
+                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                // ConPTY's input path must receive the complete terminal reply
+                // together, not the separate writes performed by write!().
+                writer.write_all(reply.as_bytes())?;
                 writer.flush()?;
+                self.replies += 1;
                 self.matched = 0;
             }
         }
@@ -125,9 +130,11 @@ impl Session {
             }
             ensure!(
                 start.elapsed() < Duration::from_secs(7),
-                "PTY condition timed out; child={:?}; received={} bytes; fixture screen:\n{}",
+                "PTY condition timed out; child={:?}; received={} bytes; cursor_replies={}; tail={:?}; fixture screen:\n{}",
                 self.child.try_wait()?,
                 self.bytes.len(),
+                self.cursor_query.replies,
+                &self.bytes[self.bytes.len().saturating_sub(32)..],
                 self.screen()
             );
         }

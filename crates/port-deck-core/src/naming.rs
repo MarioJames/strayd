@@ -108,9 +108,6 @@ pub(crate) fn display_name(
                     || !path.contains(char::is_whitespace))
         })
     });
-    if let Some(name) = executable.and_then(app_name) {
-        return name.into();
-    }
     let binary = executable
         .and_then(basename)
         .or_else(|| basename(process_name))
@@ -128,6 +125,18 @@ pub(crate) fn display_name(
             kind,
             "ruby" | "perl" | "php" | "java" | "dotnet" | "sh" | "bash" | "zsh" | "fish"
         );
+
+    if let Some(name) = executable.and_then(app_name) {
+        // macOS Python installations use Python.app for the interpreter itself.
+        // Its scripts/modules still identify the service; a custom outer app
+        // containing an interpreter helper continues to own the display name.
+        let interpreter_bundle = is_interpreter
+            && (name.eq_ignore_ascii_case(kind)
+                || (is_python && name.eq_ignore_ascii_case("python")));
+        if !interpreter_bundle {
+            return name.into();
+        }
+    }
 
     // Framework processes can replace argv/the OS title (e.g. next-server).
     if !matches!(
@@ -304,6 +313,33 @@ mod tests {
                 ),
                 &[],
                 None,
+                "Strayd Test Desk",
+            ),
+            (
+                "Python",
+                Some(
+                    "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+                ),
+                &["Python", "/tmp/fixture-project/bin/server.py"],
+                Some("fixture-project"),
+                "fixture-project",
+            ),
+            (
+                "Python",
+                Some(
+                    "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+                ),
+                &["Python", "-m", "trace_probe"],
+                Some("fixture-project"),
+                "trace_probe",
+            ),
+            (
+                "Python",
+                Some(
+                    "/Applications/Strayd Test Desk.app/Contents/Resources/Python.app/Contents/MacOS/Python",
+                ),
+                &["Python", "helper.py"],
+                Some("unrelated"),
                 "Strayd Test Desk",
             ),
             (
