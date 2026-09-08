@@ -10,6 +10,8 @@
     "check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && tsc --noEmit",
     "test:env": "bun scripts/test-env.ts",
     "test:runner": "cargo build --locked -p port-deck-cli -p strayd-test-support && bun test tests/runner.test.ts",
+    "test:release": "bun test tests/release.test.ts",
+    "release:check": "bun scripts/release-npm.ts --check",
     "test:browser": "bun scripts/browser-check.ts"
   },
   "devDependencies": {

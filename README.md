@@ -195,6 +195,8 @@ bun run pack:cli
 
 `bun run pack:cli` 只装箱当前宿主的二进制。完整 npm 包由 [build-npm.yml](.github/workflows/build-npm.yml) 在六种原生 runner 上分别构建、测试并统一装箱。
 
+正式版本在六平台安装验收通过后通过 GitHub OIDC 发布到 npm，无需保存长期发布 token。版本标签、权限配置和手动备用方式见[发布说明](docs/releasing.md)。
+
 真实进程、PTY、容器、安装包、故障清理和 CI 的运行方式见[测试环境](docs/testing-environment.md)。快速运行：`bun scripts/test-env.ts run --suite native,tui,runtime-smoke,faults,replay`；原生 macOS/Windows 与可选系统专项的验证边界在文档中单列。
 
 ## License

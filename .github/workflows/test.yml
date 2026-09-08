@@ -35,6 +35,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run test
+      - run: bun test tests/release.test.ts
       - run: bun scripts/ci-native.ts scripts/test-env.ts run --suite native,tui,runtime-smoke,faults,replay --run ci-native
       - run: bun scripts/ci-native.ts test tests/runner.test.ts
       - name: Independent cleanup
