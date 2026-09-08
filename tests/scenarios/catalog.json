@@ -125,13 +125,13 @@
       "suite": "native",
       "requires": [
         "owned-process",
-        "loopback-alias"
+        "ipv4-and-ipv6-loopback"
       ],
       "launch": [
         "${fixture}",
         "--fixture-same-port"
       ],
-      "expected": "Both addresses accept connections; the port is listed once.",
+      "expected": "Both 127.0.0.1 and ::1 accept connections on the same port; the port is listed once.",
       "sources": [
         "native-fixture"
       ]

@@ -11,6 +11,39 @@ use std::{
 
 use crate::{cases::Environment, process::alive, report::Report};
 
+#[derive(Default)]
+struct CursorQuery {
+    matched: usize,
+}
+
+impl CursorQuery {
+    fn process(
+        &mut self,
+        parser: &mut vt100::Parser,
+        bytes: &[u8],
+        writer: &mut dyn Write,
+    ) -> Result<()> {
+        // portable-pty enables PSEUDOCONSOLE_INHERIT_CURSOR. ConPTY waits for
+        // this response before producing the application's first frame.
+        const REQUEST: &[u8] = b"\x1b[6n";
+        for byte in bytes {
+            parser.process(&[*byte]);
+            self.matched = if *byte == REQUEST[self.matched] {
+                self.matched + 1
+            } else {
+                usize::from(*byte == REQUEST[0])
+            };
+            if self.matched == REQUEST.len() {
+                let (row, col) = parser.screen().cursor_position();
+                write!(writer, "\x1b[{};{}R", row + 1, col + 1)?;
+                writer.flush()?;
+                self.matched = 0;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct Session {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -18,6 +51,7 @@ pub struct Session {
     receiver: Receiver<Vec<u8>>,
     parser: vt100::Parser,
     pub bytes: Vec<u8>,
+    cursor_query: CursorQuery,
     #[cfg(unix)]
     original_flags: libc::tcflag_t,
 }
@@ -61,19 +95,23 @@ impl Session {
             receiver,
             parser: vt100::Parser::new(rows, cols, 0),
             bytes: Vec::new(),
+            cursor_query: CursorQuery::default(),
             #[cfg(unix)]
             original_flags,
         })
     }
-    fn receive(&mut self) {
+    fn receive(&mut self) -> Result<()> {
         if let Ok(bytes) = self.receiver.recv_timeout(Duration::from_millis(40)) {
-            self.parser.process(&bytes);
+            self.cursor_query
+                .process(&mut self.parser, &bytes, self.writer.as_mut())?;
             self.bytes.extend(bytes);
         }
         while let Ok(bytes) = self.receiver.try_recv() {
-            self.parser.process(&bytes);
+            self.cursor_query
+                .process(&mut self.parser, &bytes, self.writer.as_mut())?;
             self.bytes.extend(bytes);
         }
+        Ok(())
     }
     pub fn screen(&self) -> String {
         self.parser.screen().contents()
@@ -81,13 +119,15 @@ impl Session {
     pub fn wait(&mut self, predicate: impl Fn(&str) -> bool) -> Result<()> {
         let start = Instant::now();
         loop {
-            self.receive();
+            self.receive()?;
             if predicate(&self.screen()) {
                 return Ok(());
             }
             ensure!(
                 start.elapsed() < Duration::from_secs(7),
-                "PTY condition timed out; fixture screen:\n{}",
+                "PTY condition timed out; child={:?}; received={} bytes; fixture screen:\n{}",
+                self.child.try_wait()?,
+                self.bytes.len(),
                 self.screen()
             );
         }
@@ -127,7 +167,7 @@ impl Session {
         let expected = format!("\x1b]52;c;{}\x07", STANDARD.encode(command));
         let start = Instant::now();
         loop {
-            self.receive();
+            self.receive()?;
             if self.bytes[offset..]
                 .windows(expected.len())
                 .any(|bytes| bytes == expected.as_bytes())
@@ -148,7 +188,7 @@ impl Session {
             self.send(b"\x1b[6~")?;
             let until = Instant::now() + Duration::from_millis(150);
             while Instant::now() < until {
-                self.receive();
+                self.receive()?;
             }
         }
         anyhow::bail!("detail scrolling did not reach {label}: {}", self.screen())
@@ -157,7 +197,7 @@ impl Session {
         self.send(if control_c { b"\x03" } else { b"q" })?;
         let start = Instant::now();
         loop {
-            self.receive();
+            self.receive()?;
             if let Some(status) = self.child.try_wait()? {
                 ensure!(status.success(), "TUI exited unsuccessfully");
                 break;
@@ -167,7 +207,7 @@ impl Session {
                 "TUI failed to quit"
             );
         }
-        self.receive();
+        self.receive()?;
         ensure!(
             self.bytes.windows(8).any(|bytes| bytes == b"\x1b[?1049l"),
             "alternate screen was not released"
@@ -263,5 +303,21 @@ pub fn run(env: &Environment, report: &mut Report) {
             observed.push(json!({"language": language,"sizes":[[132,40],[100,18],[80,24]],"uptime_advanced_without_scan":true,"full_command_copied_after_scroll":true,"selection_reset":true,"cancel_preserved_processes":true,"hide_persisted":true,"confirmed_stop_preserved_control":true,"terminal_restored":true}));
             first.cleanup()?; second.cleanup()
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_fragmented_cursor_queries_at_the_current_position() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        let mut query = CursorQuery::default();
+        let mut replies = Vec::new();
+        for fragment in [b"\x1b[3;5H\x1b[".as_slice(), b"6", b"ntext\x1b[6n"] {
+            query.process(&mut parser, fragment, &mut replies).unwrap();
+        }
+        assert_eq!(replies, b"\x1b[3;5R\x1b[3;9R");
     }
 }

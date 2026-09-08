@@ -49,7 +49,7 @@ jobs:
         with:
           bun-version: 1.3.12
       - run: cargo test --workspace
-      - run: bun scripts/test-env.ts run --suite native,tui,faults --run release-native
+      - run: bun scripts/ci-native.ts scripts/test-env.ts run --suite native,tui,faults --run release-native
       - run: cargo build --release -p port-deck-cli --target ${{ matrix.target }}
       - name: Stage native binary
         shell: bash
@@ -122,7 +122,7 @@ jobs:
         with:
           name: strayd-npm
           path: dist/npm
-      - run: bun scripts/test-package.ts dist/npm
+      - run: bun scripts/ci-native.ts scripts/test-package.ts dist/npm
         env:
           STRAYD_EXPECT_PLATFORM: ${{ matrix.platform }}
       - uses: actions/upload-artifact@v4

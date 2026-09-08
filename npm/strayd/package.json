@@ -1,6 +1,6 @@
 {
   "name": "strayd",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Cross-platform TUI and commands for managing local development services and tunnels",
   "license": "MIT",
   "repository": {

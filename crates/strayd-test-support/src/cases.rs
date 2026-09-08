@@ -238,7 +238,7 @@ pub fn native(env: &Environment, report: &mut Report, full: bool) {
                 let port = child.ready.ports[0];
                 ensure!(
                     TcpStream::connect(("127.0.0.1", port)).is_ok()
-                        && TcpStream::connect(("127.0.0.2", port)).is_ok(),
+                        && TcpStream::connect(("::1", port)).is_ok(),
                     "both actual bindings must be reachable"
                 );
                 let service = env.scan(&child, observed)?;

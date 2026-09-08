@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     }
     if has("--fixture-same-port") {
         let port = *ports.first().context("same-port needs one listener")?;
-        sockets.push(TcpListener::bind(("127.0.0.2", port))?);
+        sockets.push(TcpListener::bind(("::1", port))?);
     }
     let _udp = if has("--fixture-udp") {
         Some(UdpSocket::bind("127.0.0.1:0")?)

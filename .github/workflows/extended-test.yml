@@ -36,7 +36,7 @@ jobs:
         with:
           dotnet-version: '8.0.414'
       - uses: Swatinem/rust-cache@v2
-      - run: bun scripts/test-env.ts run --suite native,tui,runtimes,stability,faults --run ci-extended
+      - run: bun scripts/ci-native.ts scripts/test-env.ts run --suite native,tui,runtimes,stability,faults --run ci-extended
       - name: Independent cleanup
         if: always()
         run: bun scripts/test-env.ts cleanup --run ci-extended

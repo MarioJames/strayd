@@ -107,7 +107,7 @@ APP_URL='<prepare 返回的 URL>' AGENT_BROWSER_SESSION=strayd-test-env \
 
 journey 检查中英文三个尺寸、真实按键和点击、计时、完整复制、取消与退出，截图及结果写入 `.test-env/browser-evidence`。`scripts/browser-check.ts` 是 CI 的独立服务生命周期入口，也接受外部 `APP_URL`。它使用相同 journey，关闭测试浏览器并停止自身创建的服务；本地 Agent 的正式验收仍以 browser-harness 为入口。
 
-浏览器运行需本机已有 Chrome 或先在测试环境执行 `bunx --no-install agent-browser install`。Bun Terminal 桥接运行在 Linux/macOS；Windows 终端由原生 portable-pty / ConPTY 套件验证。服务最长运行五分钟，正常退出会关闭 PTY、夹具控制管道及 HTTP 服务。
+浏览器运行需本机已有 Chrome 或先在测试环境执行 `bunx --no-install agent-browser install`。Bun Terminal 桥接运行在 Linux/macOS；Windows 终端由原生 portable-pty / ConPTY 套件验证，测试端会响应 ConPTY 初始化的光标位置查询。服务最长运行五分钟，正常退出会关闭 PTY、夹具控制管道及 HTTP 服务。
 
 ## npm 安装包
 
@@ -142,7 +142,7 @@ WSL 需启用 PowerShell interoperability；Windows 监听由本次启动的 Pow
 | `extended-test.yml` | 每日/手动：六架构、完整运行时、稳定性、离线 SSH、权限容器，以及独立专项 runner |
 | `build-npm.yml` | 六架构原生测试后统一装箱，再在六种原生 runner 上安装同一个 tgz 并验证 CLI/TTY |
 
-三个可选专项 runner 标签为 `strayd-systemd`、`strayd-wsl`、`strayd-desktop`；配置好对应系统能力后，设置仓库变量 `STRAYD_SPECIAL_RUNNERS=enabled`。未启用时 availability 记录 not-requested，不阻塞 mock 验收；显式运行某个专项而缺少能力仍返回 blocked。没有第三方应用安装任务。
+三个可选专项 runner 标签为 `strayd-systemd`、`strayd-wsl`、`strayd-desktop`；配置好对应系统能力后，设置仓库变量 `STRAYD_SPECIAL_RUNNERS=enabled`。未启用时 availability 记录 not-requested，不阻塞 mock 验收；显式运行某个专项而缺少能力仍返回 blocked。没有第三方应用安装任务。Linux 托管 runner 上，`scripts/ci-native.ts` 将夹具测试放入独立 systemd scope，保持原用户身份，避免夹具继承 runner 的服务归属；scope 运行结束后自动回收。
 
 报告由 always artifact 步骤上传，清理失败使运行失败。本次只修改本地 workflow，没有 push 或 dispatch，因此尚无远端 CI 执行结论。GitHub runner 的实际 OS 镜像版本仍随每次报告记录；六架构构建成功不能证明最低 macOS/Windows/glibc 版本兼容。
 
