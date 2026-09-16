@@ -1,8 +1,8 @@
 use clap::Parser;
 use port_deck_cli::{
-    Cli, Command, ConfigAction, DisplayConfig, Filters, HideField, HideRule, Language,
-    LanguageSetting, PlanError, PlatformFilter, StopTarget, StraydConfig, Translator,
-    apply_visibility_config, build_stop_plan, initialize_config, load_config, parse_config,
+    Cli, Command, ConfigAction, DisplayConfig, Filters, Language, LanguageSetting, PlanError,
+    PlatformFilter, ResourceRule, RuleField, StopTarget, StraydConfig, Translator,
+    apply_resource_config, build_stop_plan, initialize_config, load_config, parse_config,
     resolve_language, save_config,
 };
 use port_deck_core::{
@@ -144,16 +144,16 @@ fn visibility_rules_hide_only_matching_services_and_keep_related_tunnels() {
     }];
     let config = StraydConfig {
         display: DisplayConfig {
-            hide: vec![HideRule {
+            hide: vec![ResourceRule {
                 ports: vec![22],
                 runtimes: vec!["sshd".into()],
-                ..HideRule::default()
+                ..ResourceRule::default()
             }],
         },
         ..StraydConfig::default()
     };
 
-    let visible = apply_visibility_config(&groups, &config);
+    let visible = apply_resource_config(&groups, &config);
 
     assert_eq!(visible.len(), 1);
     assert_eq!(visible[0].primary_port, Some(22));
@@ -174,18 +174,18 @@ fn visibility_rule_fields_are_conjunctive_and_empty_rules_hide_nothing() {
     let config = StraydConfig {
         display: DisplayConfig {
             hide: vec![
-                HideRule::default(),
-                HideRule {
+                ResourceRule::default(),
+                ResourceRule {
                     ports: vec![22],
                     runtimes: vec!["sshd".into()],
-                    ..HideRule::default()
+                    ..ResourceRule::default()
                 },
             ],
         },
         ..StraydConfig::default()
     };
 
-    let visible = apply_visibility_config(&groups, &config);
+    let visible = apply_resource_config(&groups, &config);
 
     assert_eq!(visible[0].services.len(), 1);
     assert_eq!(visible[0].services[0].runtime, RuntimeKind::Node);
@@ -330,9 +330,9 @@ fn initializes_and_loads_a_persistent_config_without_overwriting_by_default() {
 fn builds_and_persists_a_general_hide_rule_from_a_detected_service() {
     let mut source = service(8100, ResourceKind::System, RuntimeKind::Sshd, 22);
     source.process_name = "sshd".into();
-    let rule = HideRule::from_service(
+    let rule = ResourceRule::from_service(
         &source,
-        &[HideField::Port, HideField::Runtime, HideField::Project],
+        &[RuleField::Port, RuleField::Runtime, RuleField::Project],
     )
     .expect("selected fields should build a rule");
     assert_eq!(rule.ports, [22]);
@@ -450,4 +450,95 @@ fn service(
         started_at: Some(1720000000),
         start_token: "100".into(),
     }
+}
+
+#[test]
+fn protection_persists_keeps_resources_visible_and_blocks_every_stop_target() {
+    let groups = vec![linked_group(false)];
+    let config = parse_config(
+        r#"
+[[protect]]
+ports = [5000]
+[[display.hide]]
+ports = [5000]
+"#,
+    )
+    .unwrap();
+    let restored = parse_config(&port_deck_cli::format_config(&config).unwrap()).unwrap();
+    assert_eq!(config, restored);
+    let visible = apply_resource_config(&groups, &restored);
+    assert_eq!(visible[0].services.len(), 2);
+    assert!(
+        visible[0]
+            .services
+            .iter()
+            .all(|service| !service.can_terminate)
+    );
+    for target in [
+        StopTarget::Dev,
+        StopTarget::Tunnel,
+        StopTarget::Resource,
+        StopTarget::Group,
+    ] {
+        for all in [false, true] {
+            assert!(build_stop_plan(&visible, target, &Filters::default(), all).is_err());
+        }
+    }
+    let mut system = development_group(5000, 8100);
+    system.services[0].resource_kind = ResourceKind::System;
+    let visible = apply_resource_config(&[system], &restored);
+    assert!(matches!(
+        build_stop_plan(&visible, StopTarget::System, &Filters::default(), true),
+        Err(PlanError::ProtectedResource(_))
+    ));
+}
+
+#[test]
+fn protection_matches_all_fields_and_removal_preserves_builtin_protection() {
+    let groups = vec![linked_group(false), linked_group(true)];
+    let mut config = parse_config(
+        r#"
+[[protect]]
+[[protect]]
+ports = [5000]
+runtimes = ["next-js"]
+"#,
+    )
+    .unwrap();
+    let visible = apply_resource_config(&groups, &config);
+    assert!(!visible[0].services[0].can_terminate);
+    assert!(visible[0].services[1].can_terminate);
+    assert!(build_stop_plan(&visible[..1], StopTarget::Tunnel, &Filters::default(), true).is_ok());
+    config.protect.clear();
+    let visible = apply_resource_config(&groups, &config);
+    assert!(visible[0].services[0].can_terminate);
+    assert!(!visible[1].services[0].can_terminate);
+}
+
+#[test]
+fn engine_rejects_protected_services_before_attempting_termination() {
+    let mut source = service(99_999, ResourceKind::Development, RuntimeKind::NextJs, 5000);
+    source.can_terminate = false;
+    assert_eq!(
+        port_deck_engine::terminate_service(&source, &[]),
+        Err(EngineError::ProtectedProcess)
+    );
+}
+
+#[test]
+fn engine_refuses_to_stop_a_unit_shared_with_a_protected_service() {
+    let mut source = service(99_999, ResourceKind::System, RuntimeKind::Other, 5000);
+    source.manager_unit = Some("shared.service".into());
+    let mut protected = source.clone();
+    protected.pid = 99_998;
+    protected.can_terminate = false;
+    let groups = vec![ResourceGroup {
+        id: "protected".into(),
+        primary_port: None,
+        services: vec![protected],
+    }];
+    assert_eq!(
+        port_deck_engine::terminate_service(&source, &groups),
+        Err(EngineError::ProtectedProcess)
+    );
 }

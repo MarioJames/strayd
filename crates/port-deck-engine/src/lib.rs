@@ -152,8 +152,55 @@ impl From<&ServiceProcess> for TerminateRequest {
     }
 }
 
-pub fn terminate_service(service: &ServiceProcess) -> Result<(), EngineError> {
+pub fn terminate_service(
+    service: &ServiceProcess,
+    groups: &[ResourceGroup],
+) -> Result<(), EngineError> {
+    if !service.can_terminate {
+        return Err(EngineError::ProtectedProcess);
+    }
+    // Stopping a process tree or a systemd unit can affect other visible resources.
+    let protected = groups
+        .iter()
+        .flat_map(|group| &group.services)
+        .filter(|other| !other.can_terminate && other.platform == service.platform)
+        .collect::<Vec<_>>();
+    if !protected.is_empty() {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        for other in protected {
+            if service.manager_unit.is_some() && service.manager_unit == other.manager_unit {
+                return Err(EngineError::ProtectedProcess);
+            }
+            if process_is_within(other.pid, service.pid, |pid| {
+                system
+                    .process(Pid::from_u32(pid))
+                    .and_then(|process| process.parent())
+                    .map(|pid| pid.as_u32())
+            }) {
+                return Err(EngineError::ProtectedProcess);
+            }
+        }
+    }
     terminate(TerminateRequest::from(service))
+}
+
+fn process_is_within(mut pid: u32, root: u32, parent: impl Fn(u32) -> Option<u32>) -> bool {
+    let mut seen = std::collections::BTreeSet::new();
+    while seen.insert(pid) {
+        if pid == root {
+            return true;
+        }
+        let Some(next) = parent(pid) else {
+            break;
+        };
+        pid = next;
+    }
+    false
 }
 
 pub fn open_local_service(port: u16) -> Result<(), EngineError> {
@@ -523,5 +570,21 @@ mod tests {
             parse_linux_manager_unit(tunnel_service).as_deref(),
             Some("demo-tunnel.service")
         );
+    }
+}
+
+#[cfg(test)]
+mod protection_tests {
+    #[test]
+    fn stopping_an_ancestor_affects_protected_descendants_but_not_siblings() {
+        let parent = |pid| match pid {
+            30 => Some(20),
+            20 | 40 => Some(10),
+            _ => None,
+        };
+        assert!(super::process_is_within(30, 10, parent));
+        assert!(super::process_is_within(30, 30, parent));
+        assert!(!super::process_is_within(30, 40, parent));
+        assert!(!super::process_is_within(30, 40, |_| Some(30)));
     }
 }

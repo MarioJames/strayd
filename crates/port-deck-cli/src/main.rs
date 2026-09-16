@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use port_deck_cli::{
     Cli, Command, ConfigAction, ConfigArgs, Language, LanguageSetting, ListArgs, StopArgs,
-    StraydConfig, Translator, TuiArgs, apply_visibility_config, build_stop_plan, filter_groups,
+    StraydConfig, Translator, TuiArgs, apply_resource_config, build_stop_plan, filter_groups,
     format_config, format_started_at, format_uptime, initialize_config, load_config,
     resolve_config_path, resolve_system_language, runtime_slug, unix_now,
 };
@@ -78,7 +78,7 @@ fn config(args: ConfigArgs, path: &std::path::Path, tr: Translator) -> Result<()
 
 fn list(args: ListArgs, config: &StraydConfig, tr: Translator) -> Result<(), String> {
     let snapshot = scan_all();
-    let visible = apply_visibility_config(&snapshot.groups, config);
+    let visible = apply_resource_config(&snapshot.groups, config);
     let groups = filter_groups(&visible, &args.filters, args.kind);
     if args.json {
         let output = ListOutput {
@@ -101,7 +101,7 @@ fn list(args: ListArgs, config: &StraydConfig, tr: Translator) -> Result<(), Str
 fn stop(args: StopArgs, config: &StraydConfig, tr: Translator) -> Result<(), String> {
     let snapshot = scan_all();
     print_warnings(&snapshot, tr);
-    let visible = apply_visibility_config(&snapshot.groups, config);
+    let visible = apply_resource_config(&snapshot.groups, config);
     let plan = build_stop_plan(&visible, args.target, &args.filters, args.all)
         .map_err(|error| tr.plan_error(&error))?;
 
@@ -124,7 +124,7 @@ fn stop(args: StopArgs, config: &StraydConfig, tr: Translator) -> Result<(), Str
     let mut stopped = 0;
     let mut errors = Vec::new();
     for service in &plan {
-        match terminate_service(service) {
+        match terminate_service(service, &visible) {
             Ok(()) => stopped += 1,
             Err(error) => errors.push(format!(
                 "{}: {}",
@@ -190,6 +190,9 @@ fn print_groups(groups: &[ResourceGroup], tr: Translator) {
         );
         for service in &group.services {
             println!("          {}", describe_service(service));
+            if !service.can_terminate {
+                println!("          {}", tr.text("tui_protected"));
+            }
             println!(
                 "          {}: {}  |  {}: {}",
                 tr.text("process_started_at"),

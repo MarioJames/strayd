@@ -63,10 +63,11 @@ npx strayd
 | 切换分类 | `←/→`、`Tab`、`Shift+Tab`、`1-4` | 点击顶部完整分类区域 |
 | 选择资源组 | `↑/↓`、`j/k`、`Home/End` | 点击资源行或滚轮 |
 | 滚动右侧详情 | `PageUp` / `PageDown` | 在详情区滚轮 |
+| 创建保护规则 | `p` | 点击 `PROTECT` / `保护` |
 | 创建隐藏规则 | `h` | 点击 `HIDE` / `隐藏` |
 | 勾选规则字段 | `Space` | 点击字段行 |
 | 打开 Settings | `,` | 点击 `SETTINGS` / `设置` |
-| 选择 / 移除隐藏规则 | `↑/↓`，`u` / `Delete` | 点击规则，再点击 `REMOVE RULE` / `移除规则` |
+| 选择 / 移除规则 | `↑/↓`，`u` / `Delete` | 点击规则，再点击 `REMOVE RULE` / `移除规则` |
 | 停止当前范围 | `s` | 点击随分类变化的 `STOP…` / `停止…` |
 | 复制命令 | — | 点击命令下方的 `COPY COMMAND` / `复制命令` 色块 |
 | 选择右侧文字 | `c`，再次按 `c` / `Esc` 返回 | 点击 `SELECT TEXT` / `选择文字` 后直接拖选 |
@@ -81,7 +82,9 @@ TUI 只保留一个停止入口，作用范围由当前分类明确决定：`全
 
 ## 持久化配置
 
-Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。按 `,` 或点击底部 `Settings / 设置` 打开弹窗，即可查看并移除自己添加的规则。修改会立即写入配置文件并刷新界面。
+Strayd 可以直接在 TUI 中维护保护和隐藏规则：按 `p` 创建保护规则，匹配的进程保持可见并标记为 `PROTECTED`，不能通过 Strayd 单独或整组停止。保护优先于隐藏规则；在设置中移除保护规则即可解除手动保护，内置的系统进程保护仍生效。规则会跨刷新和重启保留，适合需要持续查看的常驻服务、数据库或隧道；只约束 Strayd，不阻止进程自行退出或被其他工具终止。
+
+创建隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。按 `,` 或点击底部 `Settings / 设置` 打开弹窗，即可查看并移除自己添加的规则。修改会立即写入配置文件并刷新界面。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.3/docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
@@ -90,6 +93,14 @@ Strayd 可以直接在 TUI 中维护隐藏规则：选中一个资源后按 `h`�
 <p align="center">
   <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.3/docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
 </p>
+
+保护规则使用 `[[protect]]`，支持与 `[[display.hide]]` 相同的匹配字段，例如：
+
+```toml
+[[protect]]
+ports = [3000]
+runtimes = ["next-js"]
+```
 
 也可以直接维护 TOML。先生成带注释的模板：
 

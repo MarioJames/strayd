@@ -13,8 +13,8 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use port_deck_cli::{
-    ConfigPlatform, ConfigResourceKind, Filters, HideField, HideRule, Language, StopTarget,
-    StraydConfig, TabTarget, Translator, TuiArgs, apply_visibility_config, build_stop_plan,
+    ConfigPlatform, ConfigResourceKind, Filters, Language, ResourceRule, RuleField, StopTarget,
+    StraydConfig, TabTarget, Translator, TuiArgs, apply_resource_config, build_stop_plan,
     format_started_at, format_uptime, runtime_slug, save_config, unix_now,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
@@ -111,7 +111,7 @@ struct App {
     hidden_count: usize,
     regions: UiRegions,
     pending: Option<PendingStop>,
-    pending_hide: Option<PendingHide>,
+    pending_rule: Option<PendingRule>,
     settings_open: bool,
     settings_selected: usize,
     settings_list_offset: usize,
@@ -129,6 +129,7 @@ enum MouseAction {
     SelectSetting(usize),
     Stop,
     Hide,
+    Protect,
     OpenSettings,
     CloseSettings,
     SelectText,
@@ -138,7 +139,7 @@ enum MouseAction {
     RemoveRule,
     Confirm,
     Cancel,
-    ToggleHideField(usize),
+    ToggleRuleField(usize),
     SaveHide,
 }
 
@@ -180,14 +181,15 @@ struct PendingStop {
     services: Vec<ServiceProcess>,
 }
 
-struct PendingHide {
+struct PendingRule {
+    protect: bool,
     service: ServiceProcess,
-    fields: Vec<HideChoice>,
+    fields: Vec<RuleChoice>,
     selected: usize,
 }
 
-struct HideChoice {
-    field: HideField,
+struct RuleChoice {
+    field: RuleField,
     value: String,
     available: bool,
     checked: bool,
@@ -215,7 +217,7 @@ impl App {
             hidden_count,
             regions: UiRegions::new(Rect::default(), args.tab, 0),
             pending: None,
-            pending_hide: None,
+            pending_rule: None,
             settings_open: false,
             settings_selected: 0,
             settings_list_offset: 0,
@@ -270,7 +272,7 @@ impl App {
                 .refresh_every
                 .is_some_and(|interval| self.last_refresh.elapsed() >= interval)
                 && self.pending.is_none()
-                && self.pending_hide.is_none()
+                && self.pending_rule.is_none()
                 && !self.settings_open
                 && !self.text_selection_mode
             {
@@ -290,14 +292,14 @@ impl App {
             }
             return;
         }
-        if self.pending_hide.is_some() {
+        if self.pending_rule.is_some() {
             match key.code {
                 KeyCode::Down | KeyCode::Char('j') => self.select_next_hide_field(),
                 KeyCode::Up | KeyCode::Char('k') => self.select_previous_hide_field(),
                 KeyCode::Char(' ') => self.toggle_selected_hide_field(),
-                KeyCode::Enter => self.save_pending_hide(),
+                KeyCode::Enter => self.save_pending_rule(),
                 KeyCode::Esc | KeyCode::Char('q') => {
-                    self.pending_hide = None;
+                    self.pending_rule = None;
                     self.status = self.tr.text("tui_cancelled").into();
                 }
                 _ => {}
@@ -362,7 +364,8 @@ impl App {
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.select_last(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('h') => self.prepare_hide(),
+            KeyCode::Char('h') => self.prepare_rule(false),
+            KeyCode::Char('p') => self.prepare_rule(true),
             KeyCode::Char('s') => self.prepare_contextual_stop(),
             KeyCode::Char(',') => self.open_settings(),
             KeyCode::Char('c') => self.open_text_selection(),
@@ -372,7 +375,7 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         match mouse.kind {
-            MouseEventKind::ScrollDown if self.pending.is_none() && self.pending_hide.is_none() => {
+            MouseEventKind::ScrollDown if self.pending.is_none() && self.pending_rule.is_none() => {
                 if self.settings_open {
                     self.select_next_setting();
                 } else if rect_contains(self.regions.detail, mouse.column, mouse.row) {
@@ -381,7 +384,7 @@ impl App {
                     self.select_next();
                 }
             }
-            MouseEventKind::ScrollUp if self.pending.is_none() && self.pending_hide.is_none() => {
+            MouseEventKind::ScrollUp if self.pending.is_none() && self.pending_rule.is_none() => {
                 if self.settings_open {
                     self.select_previous_setting();
                 } else if rect_contains(self.regions.detail, mouse.column, mouse.row) {
@@ -392,7 +395,7 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let visible_len = if self.settings_open {
-                    self.config.display.hide.len()
+                    self.rule_count()
                 } else {
                     self.visible_group_indices().len()
                 };
@@ -406,7 +409,7 @@ impl App {
                     list_offset,
                     visible_len,
                     self.pending.is_some(),
-                    self.pending_hide.is_some(),
+                    self.pending_rule.is_some(),
                     self.settings_open,
                 ) {
                     self.handle_mouse_action(action);
@@ -422,7 +425,8 @@ impl App {
             MouseAction::Select(index) => self.selected = index,
             MouseAction::SelectSetting(index) => self.settings_selected = index,
             MouseAction::Stop => self.prepare_contextual_stop(),
-            MouseAction::Hide => self.prepare_hide(),
+            MouseAction::Hide => self.prepare_rule(false),
+            MouseAction::Protect => self.prepare_rule(true),
             MouseAction::OpenSettings => self.open_settings(),
             MouseAction::CloseSettings => {
                 self.settings_open = false;
@@ -451,11 +455,11 @@ impl App {
             MouseAction::Confirm => self.confirm_pending(),
             MouseAction::Cancel => {
                 self.pending = None;
-                self.pending_hide = None;
+                self.pending_rule = None;
                 self.status = self.tr.text("tui_cancelled").into();
             }
-            MouseAction::ToggleHideField(index) => self.toggle_hide_field(index),
-            MouseAction::SaveHide => self.save_pending_hide(),
+            MouseAction::ToggleRuleField(index) => self.toggle_hide_field(index),
+            MouseAction::SaveHide => self.save_pending_rule(),
         }
     }
 
@@ -496,10 +500,22 @@ impl App {
         self.prepare_stop(target, label);
     }
 
+    fn rule_count(&self) -> usize {
+        self.config.display.hide.len() + self.config.protect.len()
+    }
+
+    fn rules_mut(&mut self, protect: bool) -> &mut Vec<ResourceRule> {
+        if protect {
+            &mut self.config.protect
+        } else {
+            &mut self.config.display.hide
+        }
+    }
+
     fn open_settings(&mut self) {
         self.settings_selected = self
             .settings_selected
-            .min(self.config.display.hide.len().saturating_sub(1));
+            .min(self.rule_count().saturating_sub(1));
         self.settings_list_offset = 0;
         self.settings_open = true;
         self.status = self.tr.text("tui_settings_opened").into();
@@ -510,7 +526,7 @@ impl App {
         self.status = self.tr.text("tui_text_selection_opened").into();
     }
 
-    fn prepare_hide(&mut self) {
+    fn prepare_rule(&mut self, protect: bool) {
         if self.config_path.is_none() {
             self.status = self.tr.text("tui_hide_disabled").into();
             return;
@@ -523,30 +539,30 @@ impl App {
             self.status = self.tr.text("tui_no_actionable_resource").into();
             return;
         };
-        self.pending_hide = Some(PendingHide::new(service));
+        self.pending_rule = Some(PendingRule::new(service, protect));
     }
 
     fn select_next_hide_field(&mut self) {
-        if let Some(pending) = &mut self.pending_hide {
+        if let Some(pending) = &mut self.pending_rule {
             pending.selected = (pending.selected + 1).min(pending.fields.len().saturating_sub(1));
         }
     }
 
     fn select_previous_hide_field(&mut self) {
-        if let Some(pending) = &mut self.pending_hide {
+        if let Some(pending) = &mut self.pending_rule {
             pending.selected = pending.selected.saturating_sub(1);
         }
     }
 
     fn toggle_selected_hide_field(&mut self) {
-        if let Some(index) = self.pending_hide.as_ref().map(|pending| pending.selected) {
+        if let Some(index) = self.pending_rule.as_ref().map(|pending| pending.selected) {
             self.toggle_hide_field(index);
         }
     }
 
     fn toggle_hide_field(&mut self, index: usize) {
         let Some(choice) = self
-            .pending_hide
+            .pending_rule
             .as_mut()
             .and_then(|pending| pending.fields.get_mut(index))
         else {
@@ -557,12 +573,12 @@ impl App {
         }
     }
 
-    fn save_pending_hide(&mut self) {
+    fn save_pending_rule(&mut self) {
         let Some(path) = self.config_path.clone() else {
             self.status = self.tr.text("tui_hide_disabled").into();
             return;
         };
-        let Some(pending) = self.pending_hide.take() else {
+        let Some(pending) = self.pending_rule.take() else {
             return;
         };
         let fields = pending
@@ -571,26 +587,31 @@ impl App {
             .filter(|choice| choice.available && choice.checked)
             .map(|choice| choice.field)
             .collect::<Vec<_>>();
-        let Some(rule) = HideRule::from_service(&pending.service, &fields) else {
+        let Some(rule) = ResourceRule::from_service(&pending.service, &fields) else {
             self.status = self.tr.text("tui_hide_no_fields").into();
-            self.pending_hide = Some(pending);
+            self.pending_rule = Some(pending);
             return;
         };
 
-        self.config.display.hide.push(rule);
+        self.rules_mut(pending.protect).push(rule);
         if let Err(error) = save_config(&path, &self.config) {
-            self.config.display.hide.pop();
+            self.rules_mut(pending.protect).pop();
             self.status = self.tr.format(
                 "tui_hide_save_failed",
                 &[("error", self.tr.config_error(&error))],
             );
-            self.pending_hide = Some(pending);
+            self.pending_rule = Some(pending);
             return;
         }
         self.refresh();
-        self.status = self
-            .tr
-            .format("tui_hide_saved", &[("path", path.display().to_string())]);
+        self.status = self.tr.format(
+            if pending.protect {
+                "tui_protect_saved"
+            } else {
+                "tui_hide_saved"
+            },
+            &[("path", path.display().to_string())],
+        );
     }
 
     fn remove_selected_rule(&mut self) {
@@ -598,18 +619,19 @@ impl App {
             self.status = self.tr.text("tui_hide_disabled").into();
             return;
         };
-        if self.config.display.hide.is_empty()
-            || self.settings_selected >= self.config.display.hide.len()
-        {
+        if self.rule_count() == 0 || self.settings_selected >= self.rule_count() {
             self.status = self.tr.text("tui_no_rule_selected").into();
             return;
         }
-        let removed = self.config.display.hide.remove(self.settings_selected);
+        let protect = self.settings_selected >= self.config.display.hide.len();
+        let index = if protect {
+            self.settings_selected - self.config.display.hide.len()
+        } else {
+            self.settings_selected
+        };
+        let removed = self.rules_mut(protect).remove(index);
         if let Err(error) = save_config(&path, &self.config) {
-            self.config
-                .display
-                .hide
-                .insert(self.settings_selected, removed);
+            self.rules_mut(protect).insert(index, removed);
             self.status = self.tr.format(
                 "tui_remove_failed",
                 &[("error", self.tr.config_error(&error))],
@@ -618,7 +640,7 @@ impl App {
         }
         self.settings_selected = self
             .settings_selected
-            .min(self.config.display.hide.len().saturating_sub(1));
+            .min(self.rule_count().saturating_sub(1));
         self.refresh();
         self.status = self
             .tr
@@ -632,7 +654,7 @@ impl App {
         let mut stopped = 0;
         let mut failures = Vec::new();
         for service in &pending.services {
-            match terminate_service(service) {
+            match terminate_service(service, &self.snapshot.groups) {
                 Ok(()) => stopped += 1,
                 Err(error) => failures.push(format!(
                     "pid {}: {}",
@@ -693,9 +715,9 @@ impl App {
     }
 
     fn select_next_setting(&mut self) {
-        if !self.config.display.hide.is_empty() {
+        if self.rule_count() > 0 {
             self.settings_selected =
-                (self.settings_selected + 1).min(self.config.display.hide.len().saturating_sub(1));
+                (self.settings_selected + 1).min(self.rule_count().saturating_sub(1));
         }
     }
 
@@ -731,7 +753,7 @@ impl App {
         self.regions = UiRegions::new(
             area,
             self.tab,
-            self.pending_hide
+            self.pending_rule
                 .as_ref()
                 .map_or(0, |pending| pending.fields.len()),
         );
@@ -742,8 +764,8 @@ impl App {
         if let Some(pending) = &self.pending {
             self.draw_confirmation(frame, area, pending);
         }
-        if let Some(pending) = &self.pending_hide {
-            self.draw_hide_editor(frame, area, pending);
+        if let Some(pending) = &self.pending_rule {
+            self.draw_rule_editor(frame, area, pending);
         }
         if self.settings_open {
             self.draw_settings(frame);
@@ -877,15 +899,23 @@ impl App {
             .display
             .hide
             .iter()
+            .chain(&self.config.protect)
             .enumerate()
-            .map(|(index, rule)| rule_list_item(index, rule, self.tr))
+            .map(|(index, rule)| {
+                rule_list_item(
+                    index,
+                    rule,
+                    index >= self.config.display.hide.len(),
+                    self.tr,
+                )
+            })
             .collect::<Vec<_>>();
         let list = List::new(items)
             .block(
                 Block::bordered()
                     .title(panel_title(&self.tr.format(
                         "tui_rules_title",
-                        &[("count", self.config.display.hide.len().to_string())],
+                        &[("count", self.rule_count().to_string())],
                     )))
                     .border_style(Style::default().fg(BORDER))
                     .style(Style::default().fg(TEXT).bg(SURFACE))
@@ -899,7 +929,7 @@ impl App {
                     .bg(SELECTED)
                     .add_modifier(Modifier::BOLD),
             );
-        let has_rules = !self.config.display.hide.is_empty();
+        let has_rules = self.rule_count() > 0;
         let mut state = ListState::default()
             .with_selected(has_rules.then_some(self.settings_selected))
             .with_offset(self.settings_list_offset);
@@ -910,8 +940,17 @@ impl App {
             .config
             .display
             .hide
-            .get(self.settings_selected)
-            .map(|rule| rule_detail(rule, self.tr, self.config_path.as_deref()))
+            .iter()
+            .chain(&self.config.protect)
+            .nth(self.settings_selected)
+            .map(|rule| {
+                rule_detail(
+                    rule,
+                    self.settings_selected >= self.config.display.hide.len(),
+                    self.tr,
+                    self.config_path.as_deref(),
+                )
+            })
             .unwrap_or_else(|| Text::from(self.tr.text("tui_empty_rules")));
         frame.render_widget(
             Paragraph::new(detail)
@@ -1007,14 +1046,18 @@ impl App {
         );
     }
 
-    fn draw_hide_editor(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingHide) {
+    fn draw_rule_editor(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingRule) {
         let popup = centered_rect(72, 17, area);
         frame.render_widget(Clear, popup);
         frame.render_widget(
             Block::bordered()
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(PURPLE))
-                .title(self.tr.text("tui_hide_title"))
+                .title(self.tr.text(if pending.protect {
+                    "tui_protect_title"
+                } else {
+                    "tui_hide_title"
+                }))
                 .style(Style::default().bg(PANEL)),
             popup,
         );
@@ -1027,7 +1070,11 @@ impl App {
             .map_or_else(|| "-".into(), |port| port.to_string());
         frame.render_widget(
             Paragraph::new(self.tr.format(
-                "tui_hide_summary",
+                if pending.protect {
+                    "tui_protect_summary"
+                } else {
+                    "tui_hide_summary"
+                },
                 &[
                     ("runtime", runtime_slug(&pending.service.runtime).into()),
                     ("port", port),
@@ -1231,7 +1278,7 @@ impl UiRegions {
                 .iter()
                 .position(|area| rect_contains(*area, mouse.column, mouse.row))
             {
-                return Some(MouseAction::ToggleHideField(index));
+                return Some(MouseAction::ToggleRuleField(index));
             }
             return rect_contains(self.hide_save, mouse.column, mouse.row)
                 .then_some(MouseAction::SaveHide)
@@ -1285,6 +1332,7 @@ impl UiRegions {
 fn footer_actions(_tab: TabTarget) -> Vec<MouseAction> {
     vec![
         MouseAction::Hide,
+        MouseAction::Protect,
         MouseAction::Stop,
         MouseAction::OpenSettings,
         MouseAction::SelectText,
@@ -1350,6 +1398,7 @@ fn action_label(
 ) -> (&'static str, &'static str, bool) {
     match action {
         MouseAction::Hide => (tr.text("tui_action_hide"), "h", false),
+        MouseAction::Protect => (tr.text("tui_action_protect"), "p", false),
         MouseAction::RemoveRule => (tr.text("tui_action_remove"), "u", true),
         MouseAction::Stop => (tr.text(stop_action_label_key(tab, compact)), "s", true),
         MouseAction::OpenSettings => (tr.text("tui_action_settings"), ",", false),
@@ -1439,8 +1488,8 @@ fn tab_matches(tab: TabTarget, group: &ResourceGroup) -> bool {
     }
 }
 
-impl PendingHide {
-    fn new(service: ServiceProcess) -> Self {
+impl PendingRule {
+    fn new(service: ServiceProcess, protect: bool) -> Self {
         let port_value = service
             .ports
             .iter()
@@ -1456,24 +1505,25 @@ impl PendingHide {
             .cloned()
             .unwrap_or_default();
         let fields = vec![
-            hide_choice(HideField::Port, port_value, true),
+            hide_choice(RuleField::Port, port_value, true),
             hide_choice(
-                HideField::Runtime,
+                RuleField::Runtime,
                 runtime_slug(&service.runtime).into(),
                 true,
             ),
             hide_choice(
-                HideField::Kind,
+                RuleField::Kind,
                 resource_kind_slug(&service.resource_kind).into(),
                 false,
             ),
-            hide_choice(HideField::Platform, service.platform.as_str().into(), false),
-            hide_choice(HideField::ProcessName, service.process_name.clone(), false),
-            hide_choice(HideField::Project, project, false),
-            hide_choice(HideField::Command, service.command.clone(), false),
-            hide_choice(HideField::Id, service.id.clone(), false),
+            hide_choice(RuleField::Platform, service.platform.as_str().into(), false),
+            hide_choice(RuleField::ProcessName, service.process_name.clone(), false),
+            hide_choice(RuleField::Project, project, false),
+            hide_choice(RuleField::Command, service.command.clone(), false),
+            hide_choice(RuleField::Id, service.id.clone(), false),
         ];
         Self {
+            protect,
             service,
             fields,
             selected: 0,
@@ -1481,8 +1531,8 @@ impl PendingHide {
     }
 }
 
-fn hide_choice(field: HideField, value: String, checked: bool) -> HideChoice {
-    HideChoice {
+fn hide_choice(field: RuleField, value: String, checked: bool) -> RuleChoice {
+    RuleChoice {
         field,
         available: !value.is_empty(),
         value,
@@ -1512,16 +1562,16 @@ fn service_for_hide(group: &ResourceGroup, tab: TabTarget) -> Option<&ServicePro
     .or_else(|| group.services.first())
 }
 
-fn hide_field_label(field: HideField, tr: Translator) -> &'static str {
+fn hide_field_label(field: RuleField, tr: Translator) -> &'static str {
     match field {
-        HideField::Port => tr.text("tui_field_port"),
-        HideField::Runtime => tr.text("tui_field_runtime"),
-        HideField::Kind => tr.text("tui_field_kind"),
-        HideField::Platform => tr.text("tui_field_platform"),
-        HideField::ProcessName => tr.text("tui_field_process_name"),
-        HideField::Project => tr.text("tui_field_project"),
-        HideField::Command => tr.text("tui_field_command"),
-        HideField::Id => tr.text("tui_field_id"),
+        RuleField::Port => tr.text("tui_field_port"),
+        RuleField::Runtime => tr.text("tui_field_runtime"),
+        RuleField::Kind => tr.text("tui_field_kind"),
+        RuleField::Platform => tr.text("tui_field_platform"),
+        RuleField::ProcessName => tr.text("tui_field_process_name"),
+        RuleField::Project => tr.text("tui_field_project"),
+        RuleField::Command => tr.text("tui_field_command"),
+        RuleField::Id => tr.text("tui_field_id"),
     }
 }
 
@@ -1534,13 +1584,23 @@ fn resource_kind_slug(kind: &ResourceKind) -> &'static str {
     }
 }
 
-fn rule_list_item(index: usize, rule: &HideRule, tr: Translator) -> ListItem<'static> {
+fn rule_list_item(
+    index: usize,
+    rule: &ResourceRule,
+    protect: bool,
+    tr: Translator,
+) -> ListItem<'static> {
     let parts = rule_parts(rule, tr);
     ListItem::new(vec![
         Line::from(Span::styled(
             format!(
-                "#{}  {}",
+                "#{} {}  {}",
                 index + 1,
+                tr.text(if protect {
+                    "tui_action_protect"
+                } else {
+                    "tui_action_hide"
+                }),
                 parts.first().cloned().unwrap_or_default()
             ),
             Style::default().fg(Color::White),
@@ -1554,7 +1614,12 @@ fn rule_list_item(index: usize, rule: &HideRule, tr: Translator) -> ListItem<'st
     .style(Style::default().fg(TEXT).bg(SURFACE))
 }
 
-fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) -> Text<'static> {
+fn rule_detail(
+    rule: &ResourceRule,
+    protect: bool,
+    tr: Translator,
+    path: Option<&std::path::Path>,
+) -> Text<'static> {
     let path = path.map_or_else(
         || tr.text("tui_config_read_only").into(),
         |path| tr.format("tui_config_path", &[("path", path.display().to_string())]),
@@ -1562,7 +1627,11 @@ fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) 
     let mut lines = vec![
         Line::from(Span::styled(path, Style::default().fg(CYAN))),
         Line::from(""),
-        Line::from(tr.text("tui_rule_matches")),
+        Line::from(tr.text(if protect {
+            "tui_protect_matches"
+        } else {
+            "tui_rule_matches"
+        })),
         Line::from(""),
     ];
     lines.extend(rule_parts(rule, tr).into_iter().map(Line::from));
@@ -1574,7 +1643,7 @@ fn rule_detail(rule: &HideRule, tr: Translator, path: Option<&std::path::Path>) 
     Text::from(lines)
 }
 
-fn rule_parts(rule: &HideRule, tr: Translator) -> Vec<String> {
+fn rule_parts(rule: &ResourceRule, tr: Translator) -> Vec<String> {
     let mut parts = Vec::new();
     push_rule_part(
         &mut parts,
@@ -1933,7 +2002,7 @@ fn scope_label(service: &ServiceProcess) -> String {
 fn scan_visible(config: &StraydConfig) -> (ScanSnapshot, usize) {
     let mut snapshot = scan_all();
     let total = resource_count(&snapshot.groups);
-    snapshot.groups = apply_visibility_config(&snapshot.groups, config);
+    snapshot.groups = apply_resource_config(&snapshot.groups, config);
     let hidden = total.saturating_sub(resource_count(&snapshot.groups));
     (snapshot, hidden)
 }
@@ -2083,6 +2152,67 @@ mod tests {
     }
 
     #[test]
+    fn failed_protection_edits_preserve_config_and_pending_editor() {
+        use port_deck_cli::{Language, ResourceRule, StraydConfig, Translator, TuiArgs};
+        use port_deck_core::{HostPlatform, ResourceKind, RuntimeKind, ServiceProcess};
+        let directory_blocker = std::env::temp_dir().join(format!(
+            "strayd-protection-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&directory_blocker, "not a directory").unwrap();
+        let mut app = super::App::new(
+            TuiArgs::default(),
+            StraydConfig::default(),
+            Some(directory_blocker.join("config.toml")),
+            Translator::new(Language::English),
+        )
+        .unwrap();
+        let service = ServiceProcess {
+            id: "test:1".into(),
+            platform: HostPlatform::Linux,
+            pid: 99_999,
+            parent_pid: 1,
+            ports: vec![5000],
+            hosts: vec![],
+            process_name: "node".into(),
+            display_name: "test".into(),
+            command: "node server.js".into(),
+            cwd: None,
+            project_name: None,
+            runtime: RuntimeKind::Node,
+            resource_kind: ResourceKind::Development,
+            can_terminate: true,
+            manager_unit: None,
+            tunnel_target: None,
+            started_at: None,
+            start_token: "test".into(),
+        };
+        app.pending_rule = Some(super::PendingRule::new(service, true));
+        app.save_pending_rule();
+        assert!(app.config.protect.is_empty());
+        assert!(app.pending_rule.as_ref().unwrap().protect);
+        assert!(app.status.contains("Could not save rule"));
+        let rule = ResourceRule {
+            ports: vec![5000],
+            ..ResourceRule::default()
+        };
+        app.config.protect.push(rule.clone());
+        app.remove_selected_rule();
+        assert_eq!(app.config.protect, vec![rule]);
+        assert!(app.status.contains("Could not remove rule"));
+        app.pending_rule = None;
+        app.config_path = None;
+        app.prepare_rule(true);
+        assert!(app.pending_rule.is_none());
+        assert!(app.status.contains("--no-config"));
+        std::fs::remove_file(directory_blocker).unwrap();
+    }
+
+    #[test]
     fn arrow_keys_navigate_tabs_and_content() {
         assert_eq!(
             navigation_action(KeyCode::Right),
@@ -2128,6 +2258,7 @@ mod tests {
             footer_actions(TabTarget::All),
             vec![
                 MouseAction::Hide,
+                MouseAction::Protect,
                 MouseAction::Stop,
                 MouseAction::OpenSettings,
                 MouseAction::SelectText,
@@ -2158,7 +2289,7 @@ mod tests {
             Some(MouseAction::Select(7))
         );
         assert_eq!(
-            regions.action_at(mouse_down(30, 28), 0, 8, false, false, false),
+            regions.action_at(mouse_down(32, 28), 0, 8, false, false, false),
             Some(MouseAction::Stop)
         );
         assert_eq!(
@@ -2166,7 +2297,7 @@ mod tests {
             Some(MouseAction::Hide)
         );
         assert_eq!(
-            regions.action_at(mouse_down(55, 28), 0, 8, false, false, false),
+            regions.action_at(mouse_down(60, 28), 0, 8, false, false, false),
             Some(MouseAction::SelectText)
         );
         assert_eq!(
@@ -2285,7 +2416,7 @@ mod tests {
 
         assert_eq!(
             regions.action_at(mouse_down(20, 11), 0, 8, false, true, false),
-            Some(MouseAction::ToggleHideField(0))
+            Some(MouseAction::ToggleRuleField(0))
         );
         assert_eq!(
             regions.action_at(mouse_down(70, 22), 0, 8, false, true, false),

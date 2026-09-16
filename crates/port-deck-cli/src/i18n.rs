@@ -96,6 +96,9 @@ impl Translator {
             PlanError::MultipleMatches(count) => {
                 self.format("plan_multiple_matches", &[("count", count.to_string())])
             }
+            PlanError::ProtectedResource(resource) => {
+                self.format("plan_protected_resource", &[("resource", resource.clone())])
+            }
             PlanError::ProtectedGroup(group) => {
                 self.format("plan_protected_group", &[("group", group.clone())])
             }

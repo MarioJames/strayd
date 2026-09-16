@@ -23,6 +23,11 @@ language = "auto"
 # ports = [22]
 # runtimes = ["sshd"]
 
+# Example: keep a development server visible and prevent stopping it.
+# [[protect]]
+# ports = [3000]
+# runtimes = ["next-js"]
+
 # Other matchers: kinds, platforms, process_names, projects, commands, ids.
 "#;
 
@@ -88,6 +93,7 @@ pub struct StraydConfig {
     pub version: u32,
     pub language: LanguageSetting,
     pub display: DisplayConfig,
+    pub protect: Vec<ResourceRule>,
 }
 
 impl Default for StraydConfig {
@@ -96,6 +102,7 @@ impl Default for StraydConfig {
             version: current_config_version(),
             language: LanguageSetting::Auto,
             display: DisplayConfig::default(),
+            protect: Vec::new(),
         }
     }
 }
@@ -116,12 +123,12 @@ pub enum LanguageSetting {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DisplayConfig {
-    pub hide: Vec<HideRule>,
+    pub hide: Vec<ResourceRule>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct HideRule {
+pub struct ResourceRule {
     pub ports: Vec<u16>,
     pub runtimes: Vec<String>,
     pub kinds: Vec<ConfigResourceKind>,
@@ -133,7 +140,7 @@ pub struct HideRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HideField {
+pub enum RuleField {
     Port,
     Runtime,
     Kind,
@@ -343,7 +350,7 @@ fn detect_language(system_locale: Option<&str>, system_timezone: Option<&str>) -
     }
 }
 
-pub fn apply_visibility_config(
+pub fn apply_resource_config(
     groups: &[ResourceGroup],
     config: &StraydConfig,
 ) -> Vec<ResourceGroup> {
@@ -353,8 +360,17 @@ pub fn apply_visibility_config(
             let services = group
                 .services
                 .iter()
-                .filter(|service| !config.display.hide.iter().any(|rule| rule.matches(service)))
-                .cloned()
+                .filter_map(|service| {
+                    let protected = config.protect.iter().any(|rule| rule.matches(service));
+                    if !protected && config.display.hide.iter().any(|rule| rule.matches(service)) {
+                        return None;
+                    }
+                    let mut service = service.clone();
+                    if protected {
+                        service.can_terminate = false;
+                    }
+                    Some(service)
+                })
                 .collect::<Vec<_>>();
             (!services.is_empty()).then(|| ResourceGroup {
                 id: group.id.clone(),
@@ -365,12 +381,12 @@ pub fn apply_visibility_config(
         .collect()
 }
 
-impl HideRule {
-    pub fn from_service(service: &ServiceProcess, fields: &[HideField]) -> Option<Self> {
+impl ResourceRule {
+    pub fn from_service(service: &ServiceProcess, fields: &[RuleField]) -> Option<Self> {
         let mut rule = Self::default();
         for field in fields {
             match field {
-                HideField::Port => {
+                RuleField::Port => {
                     rule.ports.extend(service.ports.iter().copied());
                     if let Some(target) = &service.tunnel_target {
                         rule.ports.push(target.port);
@@ -378,19 +394,19 @@ impl HideRule {
                     rule.ports.sort_unstable();
                     rule.ports.dedup();
                 }
-                HideField::Runtime => rule.runtimes.push(runtime_slug(&service.runtime).into()),
-                HideField::Kind => rule
+                RuleField::Runtime => rule.runtimes.push(runtime_slug(&service.runtime).into()),
+                RuleField::Kind => rule
                     .kinds
                     .push(ConfigResourceKind::from(&service.resource_kind)),
-                HideField::Platform => rule.platforms.push(ConfigPlatform::from(service.platform)),
-                HideField::ProcessName => rule.process_names.push(service.process_name.clone()),
-                HideField::Project => {
+                RuleField::Platform => rule.platforms.push(ConfigPlatform::from(service.platform)),
+                RuleField::ProcessName => rule.process_names.push(service.process_name.clone()),
+                RuleField::Project => {
                     if let Some(project) = service.project_name.as_ref().or(service.cwd.as_ref()) {
                         rule.projects.push(project.clone());
                     }
                 }
-                HideField::Command => rule.commands.push(service.command.clone()),
-                HideField::Id => rule.ids.push(service.id.clone()),
+                RuleField::Command => rule.commands.push(service.command.clone()),
+                RuleField::Id => rule.ids.push(service.id.clone()),
             }
         }
         rule.has_matcher().then_some(rule)
@@ -641,6 +657,8 @@ pub enum PlanError {
     MultipleMatches(usize),
     #[error("plan_protected_group: {0}")]
     ProtectedGroup(String),
+    #[error("plan_protected_resource: {0}")]
+    ProtectedResource(String),
 }
 
 pub fn build_stop_plan(
@@ -666,6 +684,9 @@ pub fn build_stop_plan(
     }
     if matched.len() > 1 && !allow_many {
         return Err(PlanError::MultipleMatches(matched.len()));
+    }
+    if let Some(service) = matched.iter().find(|service| !service.can_terminate) {
+        return Err(PlanError::ProtectedResource(service.id.clone()));
     }
     matched.sort_by_key(stop_order);
     Ok(matched)
@@ -788,10 +809,8 @@ fn target_matches_service(target: StopTarget, service: &ServiceProcess) -> bool 
     match target {
         StopTarget::Dev => service.resource_kind == ResourceKind::Development,
         StopTarget::Tunnel => service.resource_kind == ResourceKind::Tunnel,
-        StopTarget::System => {
-            service.resource_kind == ResourceKind::System && service.can_terminate
-        }
-        StopTarget::Resource => service.can_terminate,
+        StopTarget::System => service.resource_kind == ResourceKind::System,
+        StopTarget::Resource => true,
         StopTarget::Group => false,
     }
 }
