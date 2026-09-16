@@ -139,7 +139,7 @@ WSL 需启用 PowerShell interoperability；Windows 监听由本次启动的 Pow
 | workflow | 配置的执行范围 |
 | --- | --- |
 | `test.yml` | PR/main：Ubuntu x64、Windows x64、macOS arm64；Cargo/TS 检查、native/CLI/PTY/运行时基础/回放/故障；Linux 另跑真实浏览器终端 |
-| `extended-test.yml` | 每日/手动：六架构、完整运行时、稳定性、离线 SSH、权限容器，以及独立专项 runner |
+| `extended-test.yml` | 手动：六架构、完整运行时、稳定性、离线 SSH、权限容器，以及独立专项 runner |
 | `build-npm.yml` | 六架构原生测试后统一装箱，再在六种原生 runner 上安装同一个 tgz 并验证 CLI/TTY |
 
 三个可选专项 runner 标签为 `strayd-systemd`、`strayd-wsl`、`strayd-desktop`；配置好对应系统能力后，设置仓库变量 `STRAYD_SPECIAL_RUNNERS=enabled`。未启用时 availability 记录 not-requested，不阻塞 mock 验收；显式运行某个专项而缺少能力仍返回 blocked。没有第三方应用安装任务。Linux 托管 runner 上，`scripts/ci-native.ts` 将夹具测试放入独立 systemd scope，保持原用户身份，避免夹具继承 runner 的服务归属；scope 运行结束后自动回收。
