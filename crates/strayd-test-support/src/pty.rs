@@ -293,8 +293,23 @@ pub fn run(env: &Environment, report: &mut Report) {
             pty.wait(|screen| screen.contains(if language == "en" {"CREATE HIDE RULE"} else {"创建隐藏规则"}))?;
             pty.send(b"\x1b")?;
             pty.wait(|screen| !screen.contains(if language == "en" {"CREATE HIDE RULE"} else {"创建隐藏规则"}))?;
+            pty.send(b"p")?;
+            pty.wait(|screen| screen.contains(if language == "en" {"CREATE PROTECTION RULE"} else {"创建保护规则"}))?;
+            pty.send(b"\r")?;
+            pty.wait(|screen| !screen.contains(if language == "en" {"CREATE PROTECTION RULE"} else {"创建保护规则"}) && screen.contains(if language == "en" {"PROTECTED"} else {"受保护"}))?;
+            let protected = env.cli_services(&["--config", config.to_str().unwrap(), "list", "--port", &services[0].ports[0].to_string(), "--json"])?;
+            ensure!(protected.len() == 1 && !protected[0].can_terminate, "TUI protection was not persisted for a new CLI process");
+            pty.send(b"s")?;
+            pty.wait(|screen| screen.contains(if language == "en" {"cannot be stopped as a group"} else {"拒绝整组关闭"}))?;
+            ensure!(!pty.screen().contains(confirm) && alive(&first.identity) && alive(&second.identity), "protected stop opened confirmation or stopped a fixture");
             pty.send(b",")?;
-            pty.wait(|screen| screen.contains(if language == "en" {"SETTINGS / HIDDEN RULES"} else {"设置 / 隐藏规则"}))?;
+            pty.wait(|screen| screen.contains(if language == "en" {"SETTINGS / RULES"} else {"设置 / 规则"}))?;
+            if !hidden.is_empty() { pty.send(b"\x1b[B")?; }
+            pty.wait(|screen| screen.contains(if language == "en" {"PROTECT: keep visible"} else {"保护：保持可见"}))?;
+            pty.send(b"u")?;
+            pty.wait(|screen| !screen.contains(if language == "en" {"PROTECT: keep visible"} else {"保护：保持可见"}))?;
+            let unprotected = env.cli_services(&["--config", config.to_str().unwrap(), "list", "--port", &services[0].ports[0].to_string(), "--json"])?;
+            ensure!(unprotected.len() == 1 && unprotected[0].can_terminate, "removing protection was not persisted");
             pty.send(b"\x1b")?;
             pty.wait(|screen| screen.contains(started))?;
             pty.send(b"h")?;
@@ -311,7 +326,7 @@ pub fn run(env: &Environment, report: &mut Report) {
             let (stopped, control) = if services[1].pid == first.child.id() {(&first.identity, &second.identity)} else {(&second.identity, &first.identity)};
             ensure!(!alive(stopped) && alive(control), "confirmed TUI stop did not preserve the hidden control process");
             pty.quit(language == "zh-cn")?;
-            observed.push(json!({"language": language,"sizes":[[132,40],[100,18],[80,24]],"uptime_advanced_without_scan":true,"full_command_copied_after_scroll":true,"selection_reset":true,"cancel_preserved_processes":true,"hide_persisted":true,"confirmed_stop_preserved_control":true,"terminal_restored":true}));
+            observed.push(json!({"language": language,"sizes":[[132,40],[100,18],[80,24]],"uptime_advanced_without_scan":true,"full_command_copied_after_scroll":true,"selection_reset":true,"cancel_preserved_processes":true,"protection_persisted_and_removed":true,"protected_stop_rejected":true,"hide_persisted":true,"confirmed_stop_preserved_control":true,"terminal_restored":true}));
             first.cleanup()?; second.cleanup()
         });
     }
