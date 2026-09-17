@@ -6,9 +6,10 @@ use std::process::ExitCode;
 use clap::Parser;
 use port_deck_cli::{
     Cli, Command, ConfigAction, ConfigArgs, Language, LanguageSetting, ListArgs, StopArgs,
-    StraydConfig, Translator, TuiArgs, apply_resource_config, build_stop_plan, filter_groups,
-    format_config, format_started_at, format_uptime, initialize_config, load_config,
-    resolve_config_path, resolve_system_language, runtime_slug, unix_now,
+    StraydConfig, Translator, TuiArgs, apply_resource_config, apply_resource_protection,
+    build_stop_plan, filter_groups, format_config, format_started_at, format_uptime,
+    initialize_config, load_config, resolve_config_path, resolve_system_language, runtime_slug,
+    unix_now,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -101,6 +102,7 @@ fn list(args: ListArgs, config: &StraydConfig, tr: Translator) -> Result<(), Str
 fn stop(args: StopArgs, config: &StraydConfig, tr: Translator) -> Result<(), String> {
     let snapshot = scan_all();
     print_warnings(&snapshot, tr);
+    let termination_groups = apply_resource_protection(&snapshot.groups, config);
     let visible = apply_resource_config(&snapshot.groups, config);
     let plan = build_stop_plan(&visible, args.target, &args.filters, args.all)
         .map_err(|error| tr.plan_error(&error))?;
@@ -124,7 +126,7 @@ fn stop(args: StopArgs, config: &StraydConfig, tr: Translator) -> Result<(), Str
     let mut stopped = 0;
     let mut errors = Vec::new();
     for service in &plan {
-        match terminate_service(service, &visible) {
+        match terminate_service(service, &termination_groups) {
             Ok(()) => stopped += 1,
             Err(error) => errors.push(format!(
                 "{}: {}",

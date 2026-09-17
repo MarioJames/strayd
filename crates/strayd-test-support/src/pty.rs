@@ -302,15 +302,19 @@ pub fn run(env: &Environment, report: &mut Report) {
             pty.send(b"s")?;
             pty.wait(|screen| screen.contains(if language == "en" {"cannot be stopped as a group"} else {"拒绝整组关闭"}))?;
             ensure!(!pty.screen().contains(confirm) && alive(&first.identity) && alive(&second.identity), "protected stop opened confirmation or stopped a fixture");
-            pty.send(b",")?;
-            pty.wait(|screen| screen.contains(if language == "en" {"SETTINGS / RULES"} else {"设置 / 规则"}))?;
-            if !hidden.is_empty() { pty.send(b"\x1b[B")?; }
-            pty.wait(|screen| screen.contains(if language == "en" {"PROTECT: keep visible"} else {"保护：保持可见"}))?;
-            pty.send(b"u")?;
-            pty.wait(|screen| !screen.contains(if language == "en" {"PROTECT: keep visible"} else {"保护：保持可见"}))?;
+            pty.send(b"p")?;
+            let unprotect_confirm = if language == "en" {"CONFIRM UNPROTECT"} else {"确认解除保护"};
+            pty.wait(|screen| screen.contains(unprotect_confirm))?;
+            pty.send(b"\x1b")?;
+            pty.wait(|screen| !screen.contains(unprotect_confirm))?;
+            let cancelled = env.cli_services(&["--config", config.to_str().unwrap(), "list", "--port", &services[0].ports[0].to_string(), "--json"])?;
+            ensure!(cancelled.len() == 1 && !cancelled[0].can_terminate, "cancelling unprotect changed protection");
+            pty.send(b"p")?;
+            pty.wait(|screen| screen.contains(unprotect_confirm))?;
+            pty.send(b"\r")?;
+            pty.wait(|screen| !screen.contains(unprotect_confirm))?;
             let unprotected = env.cli_services(&["--config", config.to_str().unwrap(), "list", "--port", &services[0].ports[0].to_string(), "--json"])?;
             ensure!(unprotected.len() == 1 && unprotected[0].can_terminate, "removing protection was not persisted");
-            pty.send(b"\x1b")?;
             pty.wait(|screen| screen.contains(started))?;
             pty.send(b"h")?;
             pty.wait(|screen| screen.contains(if language == "en" {"CREATE HIDE RULE"} else {"创建隐藏规则"}))?;

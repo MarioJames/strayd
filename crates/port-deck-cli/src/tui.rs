@@ -14,8 +14,8 @@ use crossterm::terminal::{
 };
 use port_deck_cli::{
     ConfigPlatform, ConfigResourceKind, Filters, Language, ResourceRule, RuleField, StopTarget,
-    StraydConfig, TabTarget, Translator, TuiArgs, apply_resource_config, build_stop_plan,
-    format_started_at, format_uptime, runtime_slug, save_config, unix_now,
+    StraydConfig, TabTarget, Translator, TuiArgs, apply_resource_config, apply_resource_protection,
+    build_stop_plan, format_started_at, format_uptime, runtime_slug, save_config, unix_now,
 };
 use port_deck_core::{HostPlatform, ResourceGroup, ResourceKind, ServiceProcess};
 use port_deck_engine::{ScanSnapshot, scan_all, terminate_service};
@@ -100,6 +100,7 @@ fn restore_terminal(
 
 struct App {
     snapshot: ScanSnapshot,
+    termination_groups: Vec<ResourceGroup>,
     config: StraydConfig,
     config_path: Option<PathBuf>,
     tr: Translator,
@@ -110,7 +111,7 @@ struct App {
     detail_group_id: Option<String>,
     hidden_count: usize,
     regions: UiRegions,
-    pending: Option<PendingStop>,
+    pending: Option<PendingAction>,
     pending_rule: Option<PendingRule>,
     settings_open: bool,
     settings_selected: usize,
@@ -176,9 +177,12 @@ struct DetailContent {
     commands: Vec<(u16, String)>,
 }
 
-struct PendingStop {
-    label: String,
-    services: Vec<ServiceProcess>,
+enum PendingAction {
+    Stop {
+        label: String,
+        services: Vec<ServiceProcess>,
+    },
+    Unprotect(Box<ServiceProcess>),
 }
 
 struct PendingRule {
@@ -202,10 +206,11 @@ impl App {
         config_path: Option<PathBuf>,
         tr: Translator,
     ) -> Result<Self, String> {
-        let (snapshot, hidden_count) = scan_visible(&config);
+        let (snapshot, hidden_count, termination_groups) = scan_visible(&config);
         let status = scan_status(&snapshot, hidden_count, tr);
         Ok(Self {
             snapshot,
+            termination_groups,
             config,
             config_path,
             tr,
@@ -465,7 +470,7 @@ impl App {
 
     fn refresh(&mut self) {
         let selected_id = self.selected_group().map(|group| group.id.clone());
-        (self.snapshot, self.hidden_count) = scan_visible(&self.config);
+        (self.snapshot, self.hidden_count, self.termination_groups) = scan_visible(&self.config);
         self.last_refresh = Instant::now();
         self.status = scan_status(&self.snapshot, self.hidden_count, self.tr);
         let visible = self.visible_group_indices();
@@ -485,7 +490,7 @@ impl App {
         };
         match build_stop_plan(&[group], target, &Filters::default(), true) {
             Ok(services) => {
-                self.pending = Some(PendingStop {
+                self.pending = Some(PendingAction::Stop {
                     label: label.into(),
                     services,
                 });
@@ -539,7 +544,25 @@ impl App {
             self.status = self.tr.text("tui_no_actionable_resource").into();
             return;
         };
-        self.pending_rule = Some(PendingRule::new(service, protect));
+        if protect
+            && self
+                .config
+                .protect
+                .iter()
+                .any(|rule| rule.matches(&service))
+        {
+            self.pending = Some(PendingAction::Unprotect(Box::new(service)));
+        } else {
+            self.pending_rule = Some(PendingRule::new(service, protect));
+        }
+    }
+
+    fn selected_protection_rule(&self) -> Option<usize> {
+        let service = service_for_hide(self.selected_group()?, self.tab)?;
+        self.config
+            .protect
+            .iter()
+            .position(|rule| rule.matches(service))
     }
 
     fn select_next_hide_field(&mut self) {
@@ -651,10 +674,17 @@ impl App {
         let Some(pending) = self.pending.take() else {
             return;
         };
+        let services = match pending {
+            PendingAction::Stop { services, .. } => services,
+            PendingAction::Unprotect(service) => {
+                self.remove_protection(*service);
+                return;
+            }
+        };
         let mut stopped = 0;
         let mut failures = Vec::new();
-        for service in &pending.services {
-            match terminate_service(service, &self.snapshot.groups) {
+        for service in &services {
+            match terminate_service(service, &self.termination_groups) {
                 Ok(()) => stopped += 1,
                 Err(error) => failures.push(format!(
                     "pid {}: {}",
@@ -675,6 +705,27 @@ impl App {
                 ],
             )
         };
+    }
+
+    fn remove_protection(&mut self, service: ServiceProcess) {
+        let Some(path) = self.config_path.clone() else {
+            self.status = self.tr.text("tui_hide_disabled").into();
+            self.pending = Some(PendingAction::Unprotect(Box::new(service)));
+            return;
+        };
+        let previous = self.config.protect.clone();
+        self.config.protect.retain(|rule| !rule.matches(&service));
+        if let Err(error) = save_config(&path, &self.config) {
+            self.config.protect = previous;
+            self.pending = Some(PendingAction::Unprotect(Box::new(service)));
+            self.status = self.tr.format(
+                "tui_remove_failed",
+                &[("error", self.tr.config_error(&error))],
+            );
+            return;
+        }
+        self.refresh();
+        self.status = self.tr.text("tui_unprotect_saved").into();
     }
 
     fn next_tab(&mut self) {
@@ -985,7 +1036,14 @@ impl App {
         let action_areas = footer_action_areas(action_row, actions.len());
         let compact = action_areas.first().is_some_and(|area| area.width < 15);
         for ((area, action), _) in action_areas.iter().zip(&actions).zip(0..) {
-            let (label, key_label, danger) = action_label(*action, self.tab, self.tr, compact);
+            let (mut label, key_label, danger) = action_label(*action, self.tab, self.tr, compact);
+            if *action == MouseAction::Protect && self.selected_protection_rule().is_some() {
+                label = self.tr.text(if compact {
+                    "tui_action_unprotect_short"
+                } else {
+                    "tui_action_unprotect"
+                });
+            }
             let color = action_color(*action, danger);
             render_button(frame, *area, &format!("{key_label}  {label}"), color);
         }
@@ -1006,30 +1064,57 @@ impl App {
         frame.render_widget(Paragraph::new(status), status_area);
     }
 
-    fn draw_confirmation(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingStop) {
+    fn draw_confirmation(&self, frame: &mut ratatui::Frame, area: Rect, pending: &PendingAction) {
         let popup = centered_rect(58, 9, area);
         frame.render_widget(Clear, popup);
-        let text = Text::from(vec![
-            Line::from(Span::styled(
+        let (title, summary) = match pending {
+            PendingAction::Stop { label, services } => (
+                "tui_confirm_title",
                 self.tr.format(
                     "tui_confirm_summary",
                     &[
-                        ("label", pending.label.clone()),
-                        ("count", pending.services.len().to_string()),
+                        ("label", label.clone()),
+                        ("count", services.len().to_string()),
                     ],
                 ),
+            ),
+            PendingAction::Unprotect(service) => (
+                "tui_unprotect_title",
+                self.tr.format(
+                    "tui_unprotect_summary",
+                    &[
+                        ("pid", service.pid.to_string()),
+                        (
+                            "count",
+                            self.config
+                                .protect
+                                .iter()
+                                .filter(|rule| rule.matches(service))
+                                .count()
+                                .to_string(),
+                        ),
+                    ],
+                ),
+            ),
+        };
+        let text = Text::from(vec![
+            Line::from(Span::styled(
+                summary,
                 Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(self.tr.text("tui_confirm_hint")).alignment(Alignment::Center),
         ]);
-        let paragraph = Paragraph::new(text).alignment(Alignment::Center).block(
-            Block::bordered()
-                .border_type(BorderType::Double)
-                .border_style(Style::default().fg(DANGER))
-                .title(self.tr.text("tui_confirm_title"))
-                .style(Style::default().bg(PANEL)),
-        );
+        let paragraph = Paragraph::new(text)
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center)
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Double)
+                    .border_style(Style::default().fg(DANGER))
+                    .title(self.tr.text(title))
+                    .style(Style::default().bg(PANEL)),
+            );
         frame.render_widget(paragraph, popup);
         let [confirm, cancel] = confirmation_button_areas(popup);
         frame.render_widget(
@@ -1999,12 +2084,13 @@ fn scope_label(service: &ServiceProcess) -> String {
     }
 }
 
-fn scan_visible(config: &StraydConfig) -> (ScanSnapshot, usize) {
+fn scan_visible(config: &StraydConfig) -> (ScanSnapshot, usize, Vec<ResourceGroup>) {
     let mut snapshot = scan_all();
     let total = resource_count(&snapshot.groups);
+    let termination_groups = apply_resource_protection(&snapshot.groups, config);
     snapshot.groups = apply_resource_config(&snapshot.groups, config);
     let hidden = total.saturating_sub(resource_count(&snapshot.groups));
-    (snapshot, hidden)
+    (snapshot, hidden, termination_groups)
 }
 
 fn resource_count(groups: &[ResourceGroup]) -> usize {
@@ -2152,7 +2238,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_protection_edits_preserve_config_and_pending_editor() {
+    fn protection_changes_require_confirmation_and_preserve_config_on_failure() {
         use port_deck_cli::{Language, ResourceRule, StraydConfig, Translator, TuiArgs};
         use port_deck_core::{HostPlatform, ResourceKind, RuntimeKind, ServiceProcess};
         let directory_blocker = std::env::temp_dir().join(format!(
@@ -2191,6 +2277,11 @@ mod tests {
             started_at: None,
             start_token: "test".into(),
         };
+        app.snapshot.groups = vec![port_deck_core::ResourceGroup {
+            id: "test".into(),
+            primary_port: Some(5000),
+            services: vec![service.clone()],
+        }];
         app.pending_rule = Some(super::PendingRule::new(service, true));
         app.save_pending_rule();
         assert!(app.config.protect.is_empty());
@@ -2201,15 +2292,46 @@ mod tests {
             ..ResourceRule::default()
         };
         app.config.protect.push(rule.clone());
-        app.remove_selected_rule();
+        app.config.display.hide.push(ResourceRule {
+            ports: vec![6000],
+            ..ResourceRule::default()
+        });
+        app.pending_rule = None;
+        app.prepare_rule(true);
+        assert!(!app.settings_open);
+        assert!(app.pending.is_some());
+        assert!(app.pending_rule.is_none());
+        app.confirm_pending();
         assert_eq!(app.config.protect, vec![rule]);
+        assert!(app.pending.is_some());
         assert!(app.status.contains("Could not remove rule"));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.pending.is_none());
+        assert_eq!(app.config.protect.len(), 1);
+        app.config.protect.push(ResourceRule {
+            runtimes: vec!["node".into()],
+            ..ResourceRule::default()
+        });
+        let unrelated = ResourceRule {
+            ports: vec![6000],
+            ..ResourceRule::default()
+        };
+        app.config.protect.push(unrelated.clone());
+        std::fs::remove_file(&directory_blocker).unwrap();
+        std::fs::create_dir(&directory_blocker).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        assert_eq!(app.config.protect.len(), 3);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.pending.is_none());
+        assert_eq!(app.config.protect, vec![unrelated]);
+        let saved = port_deck_cli::load_config(app.config_path.as_ref().unwrap()).unwrap();
+        assert_eq!(saved, app.config);
         app.pending_rule = None;
         app.config_path = None;
         app.prepare_rule(true);
         assert!(app.pending_rule.is_none());
         assert!(app.status.contains("--no-config"));
-        std::fs::remove_file(directory_blocker).unwrap();
+        std::fs::remove_dir_all(directory_blocker).unwrap();
     }
 
     #[test]

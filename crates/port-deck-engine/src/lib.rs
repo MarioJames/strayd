@@ -159,7 +159,7 @@ pub fn terminate_service(
     if !service.can_terminate {
         return Err(EngineError::ProtectedProcess);
     }
-    // Stopping a process tree or a systemd unit can affect other visible resources.
+    // Stopping a process tree or a systemd unit can affect hidden resources too.
     let protected = groups
         .iter()
         .flat_map(|group| &group.services)

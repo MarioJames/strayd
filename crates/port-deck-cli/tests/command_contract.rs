@@ -453,13 +453,11 @@ fn service(
 }
 
 #[test]
-fn protection_persists_keeps_resources_visible_and_blocks_every_stop_target() {
+fn protection_persists_and_blocks_every_stop_target() {
     let groups = vec![linked_group(false)];
     let config = parse_config(
         r#"
 [[protect]]
-ports = [5000]
-[[display.hide]]
 ports = [5000]
 "#,
     )
@@ -491,6 +489,30 @@ ports = [5000]
         build_stop_plan(&visible, StopTarget::System, &Filters::default(), true),
         Err(PlanError::ProtectedResource(_))
     ));
+}
+
+#[test]
+fn protected_resources_can_be_hidden_without_removing_protection() {
+    let groups = vec![linked_group(false)];
+    let mut config = parse_config(
+        r#"
+[[protect]]
+ports = [5000]
+[[display.hide]]
+ports = [5000]
+"#,
+    )
+    .unwrap();
+    assert!(apply_resource_config(&groups, &config).is_empty());
+    config.display.hide.clear();
+    let visible = apply_resource_config(&groups, &config);
+    assert_eq!(visible[0].services.len(), 2);
+    assert!(
+        visible[0]
+            .services
+            .iter()
+            .all(|service| !service.can_terminate)
+    );
 }
 
 #[test]
@@ -539,6 +561,38 @@ fn engine_refuses_to_stop_a_unit_shared_with_a_protected_service() {
     }];
     assert_eq!(
         port_deck_engine::terminate_service(&source, &groups),
+        Err(EngineError::ProtectedProcess)
+    );
+}
+
+#[test]
+fn hidden_protected_peers_still_block_stopping_a_shared_unit() {
+    let mut source = service(99_999, ResourceKind::System, RuntimeKind::Other, 5000);
+    source.manager_unit = Some("shared.service".into());
+    let mut protected = source.clone();
+    protected.pid = 99_998;
+    protected.ports = vec![5001];
+    let groups = vec![ResourceGroup {
+        id: "shared".into(),
+        primary_port: None,
+        services: vec![source, protected],
+    }];
+    let config = parse_config(
+        r#"
+[[protect]]
+ports = [5001]
+[[display.hide]]
+ports = [5001]
+"#,
+    )
+    .unwrap();
+    let visible = apply_resource_config(&groups, &config);
+    let plan = build_stop_plan(&visible, StopTarget::Group, &Filters::default(), true).unwrap();
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].pid, 99_999);
+    let termination_groups = port_deck_cli::apply_resource_protection(&groups, &config);
+    assert_eq!(
+        port_deck_engine::terminate_service(&plan[0], &termination_groups),
         Err(EngineError::ProtectedProcess)
     );
 }

@@ -23,7 +23,7 @@ language = "auto"
 # ports = [22]
 # runtimes = ["sshd"]
 
-# Example: keep a development server visible and prevent stopping it.
+# Example: prevent stopping a development server (it can still be hidden).
 # [[protect]]
 # ports = [3000]
 # runtimes = ["next-js"]
@@ -354,23 +354,13 @@ pub fn apply_resource_config(
     groups: &[ResourceGroup],
     config: &StraydConfig,
 ) -> Vec<ResourceGroup> {
-    groups
-        .iter()
+    apply_resource_protection(groups, config)
+        .into_iter()
         .filter_map(|group| {
             let services = group
                 .services
-                .iter()
-                .filter_map(|service| {
-                    let protected = config.protect.iter().any(|rule| rule.matches(service));
-                    if !protected && config.display.hide.iter().any(|rule| rule.matches(service)) {
-                        return None;
-                    }
-                    let mut service = service.clone();
-                    if protected {
-                        service.can_terminate = false;
-                    }
-                    Some(service)
-                })
+                .into_iter()
+                .filter(|service| !config.display.hide.iter().any(|rule| rule.matches(service)))
                 .collect::<Vec<_>>();
             (!services.is_empty()).then(|| ResourceGroup {
                 id: group.id.clone(),
@@ -379,6 +369,20 @@ pub fn apply_resource_config(
             })
         })
         .collect()
+}
+
+/// Preserve every resource for termination checks, including hidden protected peers.
+pub fn apply_resource_protection(
+    groups: &[ResourceGroup],
+    config: &StraydConfig,
+) -> Vec<ResourceGroup> {
+    let mut groups = groups.to_vec();
+    for service in groups.iter_mut().flat_map(|group| &mut group.services) {
+        if config.protect.iter().any(|rule| rule.matches(service)) {
+            service.can_terminate = false;
+        }
+    }
+    groups
 }
 
 impl ResourceRule {
@@ -423,7 +427,7 @@ impl ResourceRule {
             || !self.ids.is_empty()
     }
 
-    fn matches(&self, service: &ServiceProcess) -> bool {
+    pub fn matches(&self, service: &ServiceProcess) -> bool {
         self.has_matcher()
             && (self.ports.is_empty()
                 || self
