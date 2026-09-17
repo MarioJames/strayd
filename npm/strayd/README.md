@@ -7,7 +7,7 @@
 Strayd 是一个通过 npm 分发的跨平台 Rust TUI/CLI，用来发现、关联和停止散落在本机上的开发服务与临时公网隧道。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.4/docs/screenshots/tui-overview.svg" alt="Strayd TUI：开发服务与 Cloudflare Tunnel 关联视图" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.5/docs/screenshots/tui-overview.svg" alt="Strayd TUI：开发服务与 Cloudflare Tunnel 关联视图" width="100%" />
 </p>
 
 ## 它解决什么
@@ -87,11 +87,11 @@ Strayd 可以直接在 TUI 中维护保护和隐藏规则：按 `p` 创建保护
 创建隐藏规则：选中一个资源后按 `h`，勾选作为匹配条件的字段并保存；默认选择“端口 + 运行时”。按 `,` 或点击底部 `Settings / 设置` 打开弹窗，即可查看并移除自己添加的规则。修改会立即写入配置文件并刷新界面。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.4/docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.5/docs/screenshots/tui-config-editor.svg" alt="Strayd TUI 隐藏规则编辑器" width="100%" />
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.4/docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.5/docs/screenshots/tui-settings.svg" alt="Strayd TUI Settings：查看并移除隐藏规则" width="100%" />
 </p>
 
 保护规则使用 `[[protect]]`，支持与 `[[display.hide]]` 相同的匹配字段，例如：
@@ -128,7 +128,7 @@ runtimes = ["sshd"]
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.4/docs/screenshots/configuration.svg" alt="Strayd 持久化配置示例" width="100%" />
+  <img src="https://raw.githubusercontent.com/MarioJames/strayd/v0.2.5/docs/screenshots/configuration.svg" alt="Strayd 持久化配置示例" width="100%" />
 </p>
 
 每条 `[[display.hide]]` 都是一条独立规则。规则之间是 OR；同一规则中填写的字段是 AND；同一数组内任意值匹配即可。空规则不会隐藏任何内容。
@@ -204,9 +204,9 @@ bun run check
 bun run pack:cli
 ```
 
-`bun run pack:cli` 只装箱当前宿主的二进制。完整 npm 包由 [build-npm.yml](https://github.com/MarioJames/strayd/blob/v0.2.4/.github/workflows/build-npm.yml) 在六种原生 runner 上分别构建、测试并统一装箱。
+`bun run pack:cli` 只装箱当前宿主的二进制。完整 npm 包由 [build-npm.yml](https://github.com/MarioJames/strayd/blob/v0.2.5/.github/workflows/build-npm.yml) 在六种原生 runner 上分别构建、测试并统一装箱。
 
-真实进程、PTY、容器、安装包、故障清理和 CI 的运行方式见[测试环境](https://github.com/MarioJames/strayd/blob/v0.2.4/docs/testing-environment.md)。快速运行：`bun scripts/test-env.ts run --suite native,tui,runtime-smoke,faults,replay`；原生 macOS/Windows 与可选系统专项的验证边界在文档中单列。
+真实进程、PTY、容器、安装包、故障清理和 CI 的运行方式见[测试环境](https://github.com/MarioJames/strayd/blob/v0.2.5/docs/testing-environment.md)。快速运行：`bun scripts/test-env.ts run --suite native,tui,runtime-smoke,faults,replay`；原生 macOS/Windows 与可选系统专项的验证边界在文档中单列。
 
 ## License
 
